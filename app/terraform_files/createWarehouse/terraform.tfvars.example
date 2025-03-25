@@ -1,0 +1,21 @@
+# AWS Credentials
+aws_access_key = "YOUR_AWS_ACCESS_KEY"
+aws_secret_key = "YOUR_AWS_SECRET_KEY"
+
+# RDS Instance Configuration
+rds_instance_identifier = "your-existing-rds-instance"  
+
+# PostgreSQL Configuration
+POSTGRES_USER = "admin"          
+POSTGRES_PASSWORD = "your_password_here"  
+APP_DB_NAME = "new_database"      
+APP_DB_USER = "new_db_user"       
+APP_DB_PASS = "new_user_password"   
+
+# EC2 Configuration (for SSH access)
+ec2_instance_id = "i-xxxxxxxxxxxxxxxxx"  # The EC2 instance ID used for SSH access (if you're using SSH for running commands)
+REMOTE_USER = "ubuntu"                 # The SSH user for accessing the EC2 instance
+SSH_KEY = "/path/to/your/private/key"   # Path to your SSH private key for SSH access
+
+# Optional: If you are using a custom database port (typically 5432 for PostgreSQL)
+DB_PORT = 5432  # Default PostgreSQL port
