@@ -1,84 +1,154 @@
 import json
 import re
 import uuid
-from datetime import datetime
-from typing import Dict, Optional, Any, List
+from datetime import datetime, timezone
+from typing import Dict, Optional, Any
 
+import redis
+from redis.connection import ConnectionPool
 from app.schemas.terraform import TerraformStatus, TerraformResult, TerraformJobStatusResponse
 
 
 class TerraformJobStore:
-    """In-memory store for Terraform job results"""
-    _jobs: Dict[str, TerraformResult] = {}
+    """Redis-backed store for Terraform job results"""
     
-    @classmethod
-    def create_job(cls) -> str:
+    _pool = None
+    
+    def __init__(self, CELERY_BROKER_URL: str = 'redis://localhost:6379/0'):
+        """
+        Initialize Redis connection
+        
+        Args:
+            CELERY_BROKER_URL (str): Redis connection URL
+        """
+        if TerraformJobStore._pool is None:
+            TerraformJobStore._pool = ConnectionPool.from_url(
+                CELERY_BROKER_URL,
+                decode_responses=True,
+                max_connections=10
+            )
+        self._redis = redis.Redis(connection_pool=TerraformJobStore._pool)
+    
+    def __del__(self):
+        """Cleanup Redis connection"""
+        if self._redis:
+            self._redis.close()
+    
+    def create_job(self) -> str:
         """Create a new job and return the job ID"""
         job_id = str(uuid.uuid4())
-        cls._jobs[job_id] = TerraformResult(
-            job_id=job_id,
-            status=TerraformStatus.PENDING,
-        )
+        
+        # Create initial job data
+        job_data = {
+            'job_id': job_id,
+            'status': TerraformStatus.PENDING.value,
+            'created_at': datetime.now(timezone.utc).isoformat()
+        }
+        
+        # Store job data in Redis with expiration (24 hours)
+        self._redis.hmset(f'job:{job_id}', job_data)
+        self._redis.expire(f'job:{job_id}', 24 * 60 * 60)  # 24 hours
+        
         return job_id
     
-    @classmethod
-    def get_job(cls, job_id: str) -> Optional[TerraformResult]:
+    def get_job(self, job_id: str) -> Optional[TerraformResult]:
         """Get a job by ID"""
-        return cls._jobs.get(job_id)
+        job_data = self._redis.hgetall(f'job:{job_id}')
+        
+        if not job_data:
+            return None
+        
+        # Convert timestamps back to datetime objects
+        if 'created_at' in job_data:
+            job_data['created_at'] = datetime.fromisoformat(job_data['created_at']).replace(tzinfo=timezone.utc)
+        if 'completed_at' in job_data:
+            job_data['completed_at'] = datetime.fromisoformat(job_data['completed_at']).replace(tzinfo=timezone.utc)
+        
+        # Parse outputs if exists
+        if 'outputs' in job_data:
+            try:
+                job_data['outputs'] = json.loads(job_data['outputs'])
+            except json.JSONDecodeError:
+                job_data['outputs'] = {}
+        
+        # Ensure status is a valid enum value
+        if 'status' in job_data:
+            status_value = job_data['status']
+            # If it's already a valid enum value, use it directly
+            if status_value in TerraformStatus._value2member_map_:
+                job_data['status'] = TerraformStatus(status_value)
+            else:
+                # Default to ERROR if invalid status
+                job_data['status'] = TerraformStatus.ERROR
+        
+        return TerraformResult(**job_data)
     
-    @classmethod
-    def update_job(cls, job_id: str, **kwargs) -> TerraformResult:
+    def update_job(self, job_id: str, **kwargs) -> TerraformResult:
         """Update a job with the given attributes"""
-        if job_id not in cls._jobs:
+        if not self._redis.exists(f'job:{job_id}'):
             raise ValueError(f"Job ID {job_id} not found")
         
-        job = cls._jobs[job_id]
+        update_data = {}
         
-        # Update job with the provided attributes
         for key, value in kwargs.items():
-            setattr(job, key, value)
+            if value is None:
+                continue  # Skip None values
+                
+            if isinstance(value, datetime):
+                update_data[key] = value.astimezone(timezone.utc).isoformat()
+            elif key == 'outputs':
+                update_data[key] = json.dumps(value)
+            elif key == 'status':
+                # Handle both enum and string values
+                if isinstance(value, TerraformStatus):
+                    update_data[key] = value.value
+                else:
+                    update_data[key] = str(value)
+            else:
+                update_data[key] = str(value)  # Convert all values to strings
         
-        return job
+        if update_data:  # Only update if we have data
+            self._redis.hmset(f'job:{job_id}', update_data)
+        return self.get_job(job_id)
     
-    @classmethod
-    def set_job_running(cls, job_id: str) -> TerraformResult:
+    def set_job_running(self, job_id: str) -> TerraformResult:
         """Mark a job as running"""
-        return cls.update_job(job_id, status=TerraformStatus.RUNNING)
+        return self.update_job(job_id, status=TerraformStatus.RUNNING.value)
     
-    @classmethod
-    def set_job_success(cls, job_id: str, init_output: str, apply_output: str, outputs: Dict[str, Any]) -> TerraformResult:
+    def set_job_success(self, job_id: str, init_output: str, apply_output: str, outputs: Dict[str, Any]) -> TerraformResult:
         """Mark a job as successful and store the outputs"""
-        return cls.update_job(
+        return self.update_job(
             job_id,
-            status=TerraformStatus.SUCCESS,
+            status=TerraformStatus.SUCCESS.value,
             init_output=init_output,
             apply_output=apply_output,
             outputs=outputs,
-            completed_at=datetime.utcnow()
+            completed_at=datetime.now(timezone.utc)
         )
     
-    @classmethod
-    def set_job_error(cls, job_id: str, error: str, stderr: Optional[str] = None) -> TerraformResult:
+    def set_job_error(self, job_id: str, error: str, stderr: Optional[str] = None) -> TerraformResult:
         """Mark a job as failed"""
-        return cls.update_job(
-            job_id,
-            status=TerraformStatus.ERROR,
-            error=error,
-            stderr=stderr,
-            completed_at=datetime.utcnow()
-        )
+        update_data = {
+            'status': TerraformStatus.ERROR.value,
+            'error': error,
+            'completed_at': datetime.now(timezone.utc)
+        }
+        
+        if stderr:
+            update_data['stderr'] = stderr
+            
+        return self.update_job(job_id, **update_data)
     
-    @classmethod
-    def get_job_status(cls, job_id: str) -> Optional[TerraformJobStatusResponse]:
+    def get_job_status(self, job_id: str) -> Optional[TerraformJobStatusResponse]:
         """Get job status in a format suitable for API response"""
-        job = cls.get_job(job_id)
+        job = self.get_job(job_id)
         if not job:
             return None
         
         return TerraformJobStatusResponse(
             job_id=job.job_id,
             status=job.status,
-            message=cls._get_status_message(job),
+            message=self._get_status_message(job),
             error=job.error,
             created_at=job.created_at,
             completed_at=job.completed_at,
@@ -86,9 +156,8 @@ class TerraformJobStore:
             task_id=job.task_id
         )
     
-    @classmethod
-    def _get_status_message(cls, job: TerraformResult) -> str:
-        """Generate a human-readable status message based on job status"""
+    def _get_status_message(self, job: TerraformResult) -> str:
+        """Generate a human-readable status message"""
         if job.status == TerraformStatus.PENDING:
             return "Terraform job is pending execution"
         elif job.status == TerraformStatus.RUNNING:
@@ -98,39 +167,3 @@ class TerraformJobStore:
         elif job.status == TerraformStatus.ERROR:
             return f"Terraform job failed: {job.error}"
         return "Unknown job status"
-    
-    @staticmethod
-    def extract_terraform_outputs(output: str) -> Dict[str, Any]:
-        """Extract outputs from terraform apply output"""
-        # Parse terraform output section
-        outputs = {}
-        
-        # Find the outputs section in terraform output
-        output_section = re.search(r'Outputs:(.*?)(?:\n\n|\Z)', output, re.DOTALL)
-        if not output_section:
-            return outputs
-            
-        output_lines = output_section.group(1).strip().split('\n')
-        
-        current_output = None
-        for line in output_lines:
-            line = line.strip()
-            if not line:
-                continue
-                
-            # Check if this is a new output
-            output_match = re.match(r'^([a-zA-Z0-9_-]+) = (.*)$', line)
-            if output_match:
-                key = output_match.group(1)
-                value = output_match.group(2)
-                
-                # Try to parse as JSON if possible
-                try:
-                    # Strip quotes from string if present
-                    if value.startswith('"') and value.endswith('"'):
-                        value = value[1:-1]
-                    outputs[key] = value
-                except json.JSONDecodeError:
-                    outputs[key] = value
-        
-        return outputs 

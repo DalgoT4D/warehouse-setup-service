@@ -1,5 +1,5 @@
 # Variables to be defined in terraform.tfvars or variables.tf
-variable "rds_instance_identifier" {
+variable "rdsname" {
   description = "The identifier of the existing RDS instance."
 }
 
@@ -34,3 +34,11 @@ variable "SSH_KEY" {
 variable "ec2_instance_id" {
   description = "The EC2 instance ID used for SSH access."
 }
+
+variable "aws_access_key"{
+  description = "aws access key"
+}
+variable "aws_secret_key"{
+  description = "aws access key"
+}
+

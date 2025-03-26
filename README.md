@@ -60,7 +60,7 @@ Alternatively, to run just the API for development:
 # Run the FastAPI server
 uvicorn app.main:app --reload
 # In a separate terminal, start a Celery worker
-celery -A app.core.celery_app worker --loglevel=info
+ celery -A app.core.celery_app worker -Q terraform -l info &
 ```
 
 The API will be available at http://localhost:8000

@@ -2,12 +2,11 @@ provider "aws" {
   region     = "ap-south-1"   # Specify the region
   access_key = var.aws_access_key
   secret_key = var.aws_secret_key
-  token      = var.aws_session_token
 }
 
 # Data to get the existing RDS instance information
 data "aws_db_instance" "PostgresRDS" {
-  db_instance_identifier = var.rds_instance_identifier
+ db_instance_identifier = var.rdsname
 }
 
 # Create the database and user using remote-exec provisioner

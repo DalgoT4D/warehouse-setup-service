@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+import time
 
 from app.core.auth import get_api_key
 from app.core.config import settings
@@ -15,43 +16,38 @@ router = APIRouter()
 # Path to Terraform scripts from settings
 TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE = settings.TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE
 
+# Create a single job store instance to be used across the router
+job_store = TerraformJobStore(CELERY_BROKER_URL=settings.CELERY_BROKER_URL)
 
 @router.post("/apply", response_model=TerraformResponse)
-async def start_terraform_job(
-    api_key: str = Depends(get_api_key)
-) -> Any:
-    """
-    Run terraform apply to create warehouse infrastructure.
-    
-    This is a long-running task that executes in the background using Celery.
-    Returns a job ID that can be used to check the status later.
-    """
+async def create_warehouse():
     try:
-        # Check if the script path exists
-        if not os.path.exists(TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE):
+        # Get the base project directory path
+        terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE
+        main_tf_path = os.path.join(terraform_path, "main.tf")
+        
+        if not os.path.exists(main_tf_path):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Terraform script path not found: {TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE}"
+                detail=f"Terraform script path not found: {main_tf_path}"
             )
         
         # Create a new job
-        job_id = TerraformJobStore.create_job()
+        job_id = job_store.create_job()
         
         # Start the Celery task
         task = run_terraform_apply.delay(job_id)
         
-        # Update job with the task ID for reference
-        TerraformJobStore.update_job(job_id, task_id=task.id)
+        # Update job with the task ID
+        job_store.update_job(job_id, task_id=task.id)
         
-        # Get the job status to return
-        job_status = TerraformJobStore.get_job_status(job_id)
-        
-        return job_status
-        
+        # Return the job status
+        return job_store.get_job_status(job_id)
+
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start Terraform job: {str(e)}"
+            detail=str(e)
         )
 
 
@@ -66,7 +62,7 @@ async def get_terraform_status(
     This endpoint can be polled to check the progress of a long-running job.
     When the job is complete, it will include the Terraform outputs.
     """
-    job_status = TerraformJobStore.get_job_status(job_id)
+    job_status = job_store.get_job_status(job_id)
     
     if not job_status:
         raise HTTPException(
@@ -74,4 +70,4 @@ async def get_terraform_status(
             detail=f"Job ID {job_id} not found"
         )
     
-    return job_status 
+    return job_status
