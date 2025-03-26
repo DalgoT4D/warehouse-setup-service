@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     
     # Terraform Settings
     TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE: str = "/Users/himanshut4d/Documents/Tech4Dev/Dalgo/warehouse_setup/app/terraform_files/createWarehouse"
+    TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET: str = "/Users/himanshut4d/Documents/Tech4Dev/Dalgo/warehouse_setup/app/terraform_files/createSuperset"
     
     # Celery and Redis settings
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"

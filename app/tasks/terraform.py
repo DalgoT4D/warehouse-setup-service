@@ -61,6 +61,43 @@ def run_terraform_apply(self, job_id: str) -> Dict[str, Any]:
         terraform_path = "/Users/himanshut4d/Documents/Tech4Dev/Dalgo/warehouse_setup/app/terraform_files/createWarehouse"
         logger.info(f"Using fallback path: {terraform_path}")
     
+    return _run_terraform_commands(job_id, terraform_path)
+
+@celery_app.task(bind=True, base=TerraformTask)
+def run_terraform_apply_superset(self, job_id: str) -> Dict[str, Any]:
+    """
+    Run terraform apply for Superset in the specified directory
+    """
+    logger.info(f"Starting Superset Terraform apply job {job_id}")
+    logger.info(f"Current working directory: {os.getcwd()}")
+    logger.info(f"Environment variable from settings: {settings.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET}")
+    
+    # Verify job exists first
+    if not job_store.get_job(job_id):
+        error_msg = f"Job {job_id} not found in Redis"
+        logger.error(error_msg)
+        job_store.set_job_error(job_id, error_msg)
+        return {"status": "error", "error": error_msg}
+    
+    # Update job status to running
+    job_store.set_job_running(job_id)
+    
+    # Use a hardcoded absolute path as a fallback
+    terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET
+    
+    # If the path from settings doesn't exist, try a hardcoded absolute path
+    if not os.path.exists(terraform_path):
+        logger.warning(f"Path from settings doesn't exist: {terraform_path}")
+        # Hardcode the absolute path as a fallback
+        terraform_path = "/Users/himanshut4d/Documents/Tech4Dev/Dalgo/warehouse_setup/app/terraform_files/createSuperset"
+        logger.info(f"Using fallback path: {terraform_path}")
+    
+    return _run_terraform_commands(job_id, terraform_path)
+
+def _run_terraform_commands(job_id: str, terraform_path: str) -> Dict[str, Any]:
+    """
+    Common function to run Terraform commands
+    """
     main_tf_path = os.path.join(terraform_path, "main.tf")
     
     logger.info(f"Looking for Terraform files at: {terraform_path}")
