@@ -14,6 +14,11 @@ class TerraformStatus(str, Enum):
     ERROR = "error"
 
 
+class OrgSlugRequest(BaseModel):
+    """Request model with organization slug"""
+    org_slug: str
+
+
 class TerraformResponse(BaseModel):
     """Response model for Terraform operations"""
     job_id: str

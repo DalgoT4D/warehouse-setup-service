@@ -59,6 +59,7 @@ htmlcov/
 
 # Terraform state files (store sensitive data)
 terraform.tfstate
+.terraform.tfstate.lock.info
 terraform.tfstate.backup
 *.tfstate
 *.tfstate.backup
@@ -88,3 +89,4 @@ Thumbs.db
 *.swp
 *.swo
 *.bak
+.qodo

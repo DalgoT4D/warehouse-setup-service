@@ -1,5 +1,6 @@
 import os
 from typing import Any, Dict, Optional
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -7,29 +8,70 @@ import time
 
 from app.core.auth import get_api_key
 from app.core.config import settings
-from app.schemas.terraform import TerraformResponse, TerraformStatus, TerraformJobStatusResponse
+from app.schemas.terraform import TerraformResponse, TerraformStatus, TerraformJobStatusResponse, OrgSlugRequest
 from app.services.terraform_job_store import TerraformJobStore
-from app.tasks.terraform import run_terraform_apply
+from app.tasks.terraform import run_terraform_apply, run_terraform_apply_superset
 
 router = APIRouter()
 
 # Path to Terraform scripts from settings
 TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE = settings.TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE
+TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET = settings.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET
 
 # Create a single job store instance to be used across the router
 job_store = TerraformJobStore(CELERY_BROKER_URL=settings.CELERY_BROKER_URL)
 
-@router.post("/apply", response_model=TerraformResponse)
-async def create_warehouse():
+def update_tfvars_with_org_slug(file_path, replacements):
+    """
+    Update terraform.tfvars file with org_slug
+    """
     try:
-        # Get the base project directory path
-        terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE
-        main_tf_path = os.path.join(terraform_path, "main.tf")
+        # Read the file
+        with open(file_path, 'r') as file:
+            content = file.read()
         
-        if not os.path.exists(main_tf_path):
+        # Make replacements
+        for key, value_template in replacements.items():
+            # Create regex to find the variable assignment
+            pattern = rf'^({key}\s*=\s*)"[^"]*"(.*)$'
+            replacement = rf'\1"{value_template}"\2'
+            content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+        
+        # Write back to file
+        with open(file_path, 'w') as file:
+            file.write(content)
+            
+        return True
+    except Exception as e:
+        print(f"Error updating tfvars: {str(e)}")
+        return False
+
+@router.post("/warehouse", response_model=TerraformResponse)
+async def create_warehouse(request: OrgSlugRequest):
+    """
+    Create a new warehouse database with the provided organization slug
+    """
+    try:
+        # Get the terraform.tfvars file path
+        terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE
+        tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
+        
+        if not os.path.exists(tfvars_path):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Terraform script path not found: {main_tf_path}"
+                detail=f"Terraform vars file not found: {tfvars_path}"
+            )
+        
+        # Update the terraform.tfvars file with org_slug
+        replacements = {
+            "APP_DB_NAME": f"warehouse_{request.org_slug}",
+            "APP_DB_USER": f"warehouse_{request.org_slug}"
+        }
+        
+        if not update_tfvars_with_org_slug(tfvars_path, replacements):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update terraform variables"
             )
         
         # Create a new job
@@ -50,9 +92,56 @@ async def create_warehouse():
             detail=str(e)
         )
 
+@router.post("/superset", response_model=TerraformResponse)
+async def create_superset(request: OrgSlugRequest):
+    """
+    Create a new Superset instance with the provided organization slug
+    """
+    try:
+        # Get the terraform.tfvars file path
+        terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET
+        tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
+        
+        if not os.path.exists(tfvars_path):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Terraform vars file not found: {tfvars_path}"
+            )
+        
+        # Update the terraform.tfvars file with org_slug
+        replacements = {
+            "CLIENT_NAME": f"{request.org_slug}",
+            "OUTPUT_DIR": f"../../../{request.org_slug}",
+            "APP_DB_USER": f"superset_{request.org_slug}",
+            "APP_DB_NAME": f"superset_{request.org_slug}"
+        }
+        
+        if not update_tfvars_with_org_slug(tfvars_path, replacements):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update terraform variables"
+            )
+        
+        # Create a new job
+        job_id = job_store.create_job()
+        
+        # Start the Celery task
+        task = run_terraform_apply_superset.apply_async(args=[job_id], queue='terraform')
+        
+        # Update job with the task ID
+        job_store.update_job(job_id, task_id=task.id)
+        
+        # Return the job status
+        return job_store.get_job_status(job_id)
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
 
 @router.get("/status/{job_id}", response_model=TerraformJobStatusResponse)
-async def get_terraform_status(
+async def get_task_info(
     job_id: str,
     api_key: str = Depends(get_api_key)
 ) -> Any:
