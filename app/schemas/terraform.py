@@ -38,6 +38,7 @@ class TerraformJobStatusResponse(BaseModel):
     completed_at: Optional[datetime] = None
     outputs: Optional[Dict[str, Any]] = None
     task_id: Optional[str] = None
+    credentials: Optional[Dict[str, str]] = None
 
 
 class TerraformResult(BaseModel):
@@ -51,4 +52,5 @@ class TerraformResult(BaseModel):
     outputs: Optional[Dict[str, Any]] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
-    task_id: Optional[str] = None 
+    task_id: Optional[str] = None
+    credentials: Optional[Dict[str, str]] = None 

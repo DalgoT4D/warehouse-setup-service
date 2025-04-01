@@ -71,6 +71,13 @@ class TerraformJobStore:
             except json.JSONDecodeError:
                 job_data['outputs'] = {}
         
+        # Parse credentials if exists
+        if 'credentials' in job_data:
+            try:
+                job_data['credentials'] = json.loads(job_data['credentials'])
+            except json.JSONDecodeError:
+                job_data['credentials'] = {}
+        
         # Ensure status is a valid enum value
         if 'status' in job_data:
             status_value = job_data['status']
@@ -145,7 +152,7 @@ class TerraformJobStore:
         if not job:
             return None
         
-        return TerraformJobStatusResponse(
+        response = TerraformJobStatusResponse(
             job_id=job.job_id,
             status=job.status,
             message=self._get_status_message(job),
@@ -155,6 +162,12 @@ class TerraformJobStore:
             outputs=job.outputs,
             task_id=job.task_id
         )
+        
+        # Only include credentials if the job completed successfully
+        if job.status == TerraformStatus.SUCCESS and job.credentials:
+            response.credentials = job.credentials
+        
+        return response
     
     def _get_status_message(self, job: TerraformResult) -> str:
         """Generate a human-readable status message"""
@@ -167,3 +180,27 @@ class TerraformJobStore:
         elif job.status == TerraformStatus.ERROR:
             return f"Terraform job failed: {job.error}"
         return "Unknown job status"
+    
+    def store_job_credentials(self, job_id: str, credentials: Dict[str, str]) -> bool:
+        """Store credentials for a job"""
+        if not credentials or not isinstance(credentials, dict):
+            return False
+        
+        if not self._redis.exists(f'job:{job_id}'):
+            return False
+        
+        # Store credentials as a JSON string
+        credentials_json = json.dumps(credentials)
+        self._redis.hset(f'job:{job_id}', 'credentials', credentials_json)
+        return True
+    
+    def get_job_credentials(self, job_id: str) -> Optional[Dict[str, str]]:
+        """Retrieve credentials for a completed job"""
+        credentials_json = self._redis.hget(f'job:{job_id}', 'credentials')
+        if not credentials_json:
+            return None
+        
+        try:
+            return json.loads(credentials_json)
+        except json.JSONDecodeError:
+            return None

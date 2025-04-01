@@ -88,6 +88,13 @@ async def create_warehouse(request: OrgSlugRequest):
         # Create a new job
         job_id = job_store.create_job()
         
+        # Store credentials for later retrieval
+        job_store.store_job_credentials(job_id, {
+            "db_name": f"warehouse_{request.org_slug}",
+            "db_user": f"warehouse_{request.org_slug}",
+            "db_password": db_password
+        })
+        
         # Start the Celery task
         task = run_terraform_apply.delay(job_id)
         
@@ -144,6 +151,16 @@ async def create_superset(request: OrgSlugRequest):
         # Create a new job
         job_id = job_store.create_job()
         
+        # Store credentials for later retrieval
+        job_store.store_job_credentials(job_id, {
+            "client_name": f"{request.org_slug}",
+            "db_name": f"superset_{request.org_slug}",
+            "db_user": f"superset_{request.org_slug}",
+            "db_password": db_password,
+            "admin_password": admin_password,
+            "secret_key": secret_key
+        })
+        
         # Start the Celery task
         task = run_terraform_apply_superset.apply_async(args=[job_id], queue='terraform')
         
@@ -169,6 +186,8 @@ async def get_task_info(
     
     This endpoint can be polled to check the progress of a long-running job.
     When the job is complete, it will include the Terraform outputs.
+    For successful jobs, it will also include the credentials that were used
+    to configure the resource (database passwords, admin accounts, etc.).
     """
     job_status = job_store.get_job_status(job_id)
     
