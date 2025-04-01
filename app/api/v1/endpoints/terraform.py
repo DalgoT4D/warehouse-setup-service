@@ -76,7 +76,7 @@ async def create_warehouse(request: OrgSlugRequest):
         replacements = {
             "APP_DB_NAME": f"warehouse_{request.org_slug}",
             "APP_DB_USER": f"warehouse_{request.org_slug}",
-            "APP_DB_PASS": db_password
+            "APP_DB_PASS": db_password,
         }
         
         if not update_tfvars_with_org_slug(tfvars_path, replacements):
@@ -139,7 +139,8 @@ async def create_superset(request: OrgSlugRequest):
             "APP_DB_NAME": f"superset_{request.org_slug}",
             "SUPERSET_SECRET_KEY": secret_key,
             "SUPERSET_ADMIN_PASSWORD": admin_password,
-            "APP_DB_PASS": db_password
+            "APP_DB_PASS": db_password,
+            "neworg_name": f"{request.org_slug}.dalgo.org"
         }
         
         if not update_tfvars_with_org_slug(tfvars_path, replacements):
@@ -157,8 +158,10 @@ async def create_superset(request: OrgSlugRequest):
             "db_name": f"superset_{request.org_slug}",
             "db_user": f"superset_{request.org_slug}",
             "db_password": db_password,
+            "admin": "admin",
             "admin_password": admin_password,
-            "secret_key": secret_key
+            "secret_key": secret_key,
+            "neworg_name": f"{request.org_slug}.dalgo.org"
         })
         
         # Start the Celery task
