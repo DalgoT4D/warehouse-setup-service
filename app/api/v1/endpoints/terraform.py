@@ -1,6 +1,8 @@
 import os
 from typing import Any, Dict, Optional
 import re
+import secrets
+import string
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -20,6 +22,11 @@ TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET = settings.TERRAFORM_SCRIPT_PATH_CREATE_SU
 
 # Create a single job store instance to be used across the router
 job_store = TerraformJobStore(CELERY_BROKER_URL=settings.CELERY_BROKER_URL)
+
+def generate_secure_password(length=16):
+    """Generate a secure random alphanumeric password"""
+    alphabet = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 def update_tfvars_with_org_slug(file_path, replacements):
     """
@@ -62,10 +69,14 @@ async def create_warehouse(request: OrgSlugRequest):
                 detail=f"Terraform vars file not found: {tfvars_path}"
             )
         
-        # Update the terraform.tfvars file with org_slug
+        # Generate secure password for APP_DB_PASS
+        db_password = generate_secure_password()
+        
+        # Update the terraform.tfvars file with org_slug and generated password
         replacements = {
             "APP_DB_NAME": f"warehouse_{request.org_slug}",
-            "APP_DB_USER": f"warehouse_{request.org_slug}"
+            "APP_DB_USER": f"warehouse_{request.org_slug}",
+            "APP_DB_PASS": db_password
         }
         
         if not update_tfvars_with_org_slug(tfvars_path, replacements):
@@ -108,12 +119,20 @@ async def create_superset(request: OrgSlugRequest):
                 detail=f"Terraform vars file not found: {tfvars_path}"
             )
         
-        # Update the terraform.tfvars file with org_slug
+        # Generate secure passwords
+        secret_key = generate_secure_password(32)
+        admin_password = generate_secure_password()
+        db_password = generate_secure_password()
+        
+        # Update the terraform.tfvars file with org_slug and generated passwords
         replacements = {
             "CLIENT_NAME": f"{request.org_slug}",
             "OUTPUT_DIR": f"../../../{request.org_slug}",
             "APP_DB_USER": f"superset_{request.org_slug}",
-            "APP_DB_NAME": f"superset_{request.org_slug}"
+            "APP_DB_NAME": f"superset_{request.org_slug}",
+            "SUPERSET_SECRET_KEY": secret_key,
+            "SUPERSET_ADMIN_PASSWORD": admin_password,
+            "APP_DB_PASS": db_password
         }
         
         if not update_tfvars_with_org_slug(tfvars_path, replacements):
