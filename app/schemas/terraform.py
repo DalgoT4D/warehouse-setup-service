@@ -15,8 +15,8 @@ class TerraformStatus(str, Enum):
 class TerraformResponse(BaseModel):
     """Response model for Terraform operations"""
     task_id: str
-    status: TerraformStatus
-    message: str
+    status: TerraformStatus = TerraformStatus.PENDING
+    message: str = "Terraform job is pending execution"
     error: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -30,7 +30,6 @@ class TerraformJobStatusResponse(BaseModel):
     created_at: datetime
     completed_at: Optional[datetime] = None
     outputs: Optional[Dict[str, Any]] = None
-    task_id: Optional[str] = None
     credentials: Optional[Dict[str, str]] = None
 
 
@@ -45,5 +44,4 @@ class TerraformResult(BaseModel):
     outputs: Optional[Dict[str, Any]] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
-    task_id: Optional[str] = None
     credentials: Optional[Dict[str, str]] = None 

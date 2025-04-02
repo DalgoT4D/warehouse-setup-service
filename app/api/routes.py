@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from celery.result import AsyncResult
+from celery.states import SUCCESS, FAILURE, REVOKED, REJECTED, IGNORED, PENDING, RECEIVED, STARTED, RETRY
 
 from app.core.auth import get_api_key
 from app.core.config import settings
@@ -16,6 +17,10 @@ from app.schemas.terraform import TerraformResponse, TerraformStatus, TerraformJ
 from app.tasks.terraform import run_terraform_commands
 
 logger = logging.getLogger(__name__)
+
+# Define Celery state groups for easier checking
+CELERY_TERMINAL_STATES = [SUCCESS, FAILURE, REVOKED, REJECTED, IGNORED]
+CELERY_ERROR_STATES = [FAILURE, REVOKED, REJECTED]
 
 # Create routers
 api_router = APIRouter()
@@ -74,17 +79,42 @@ def get_status_message(status: TerraformStatus, error: str = None) -> str:
     return "Unknown job status"
 
 def celery_status_to_terraform_status(celery_status):
-    """Convert Celery task status to TerraformStatus"""
-    # Convert to lowercase for case-insensitive comparison
-    status_lower = celery_status.lower() if celery_status else ""
+    """
+    Convert Celery task status to TerraformStatus
     
-    if status_lower in ['pending', 'received']:
-        return TerraformStatus.PENDING
-    elif status_lower == 'started':
-        return TerraformStatus.RUNNING
-    elif status_lower == 'success':
+    Handles all standard Celery states:
+    - SUCCESS: Task completed successfully
+    - FAILURE: Task failed due to an exception or other error
+    - REVOKED: Task was revoked before execution
+    - REJECTED: Task was rejected by the worker
+    - IGNORED: Task was ignored by the worker
+    """
+    logger.debug(f"Converting Celery status: {celery_status}")
+    
+    # Check for SUCCESS state
+    if celery_status == SUCCESS:
         return TerraformStatus.SUCCESS
-    else:  # failure, revoked, retry, etc.
+    
+    # Check for error states (FAILURE, REVOKED, REJECTED)
+    elif celery_status in CELERY_ERROR_STATES:
+        return TerraformStatus.ERROR
+    
+    # Check if the state is one of the terminal states but not SUCCESS or in ERROR_STATES
+    elif celery_status in CELERY_TERMINAL_STATES:
+        # This catches IGNORED
+        return TerraformStatus.ERROR
+    
+    # Check for PENDING and RECEIVED states
+    elif celery_status in [PENDING, RECEIVED]:
+        return TerraformStatus.PENDING
+    
+    # STARTED and RETRY indicate the task is running
+    elif celery_status in [STARTED, RETRY]:
+        return TerraformStatus.RUNNING
+    
+    # Any other states default to ERROR for safety
+    else:
+        logger.warning(f"Unrecognized Celery status: {celery_status}, treating as ERROR")
         return TerraformStatus.ERROR
 
 # Health check endpoint
@@ -271,9 +301,17 @@ async def get_task_status(task_id: str) -> Any:
     outputs = None
     credentials = None
     
-    # If the task is successful or ready (completed), get the result
-    if task_result.ready():
-        logger.info(f"Task is ready, status: {task_result.status}")
+    # Determine error message based on Celery state
+    if task_result.status == REVOKED:
+        error = "Task was cancelled or revoked"
+    elif task_result.status == REJECTED:
+        error = "Task was rejected by worker"
+    elif task_result.status == IGNORED:
+        error = "Task was ignored by worker"
+    
+    # If the task is in a terminal state (SUCCESS, FAILURE, REVOKED, REJECTED, IGNORED)
+    if task_result.status in CELERY_TERMINAL_STATES:
+        logger.info(f"Task is in terminal state: {task_result.status}")
         try:
             # Always try to get the result, regardless of success/failure
             result = task_result.result
@@ -288,7 +326,7 @@ async def get_task_status(task_id: str) -> Any:
                 logger.info(f"Extracted outputs: {outputs}")
                 
                 # If status is successful, ensure we include credentials
-                if terraform_status == TerraformStatus.SUCCESS:
+                if task_result.status == SUCCESS:
                     logger.info(f"Job successful, including credentials in response")
                 
                 # If there's an error message, capture it
@@ -300,8 +338,11 @@ async def get_task_status(task_id: str) -> Any:
             error = str(e)
     
     # Set the error message if task failed but we don't have a specific error yet
-    if task_result.failed() and not error:
-        error = str(task_result.result) if task_result.result else "Task failed"
+    if task_result.status == FAILURE and not error:
+        try:
+            error = str(task_result.result) if task_result.result else "Task failed"
+        except Exception as e:
+            error = f"Task failed with inaccessible result: {str(e)}"
         logger.error(f"Task failed: {error}")
     
     # Create status response
@@ -311,7 +352,7 @@ async def get_task_status(task_id: str) -> Any:
         message=get_status_message(terraform_status, error),
         error=error,
         created_at=datetime.now(timezone.utc),  # Not available from AsyncResult directly
-        completed_at=datetime.now(timezone.utc) if task_result.ready() else None,  # Use ready() to check completion
+        completed_at=datetime.now(timezone.utc) if task_result.status in CELERY_TERMINAL_STATES else None,
         outputs=outputs,
         credentials=credentials
     )

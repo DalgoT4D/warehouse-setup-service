@@ -5,6 +5,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 from celery.result import AsyncResult
+from celery.states import SUCCESS, FAILURE
 
 from app.schemas.terraform import TerraformStatus
 
@@ -77,11 +78,10 @@ def test_get_terraform_status(
     """
     task_id = "mocked-task-id"
     
-    # Create a mock AsyncResult with correct casing for status
-    # Celery uses lowercase 'success' not uppercase 'SUCCESS'
+    # Create a mock AsyncResult with correct Celery SUCCESS constant
     mock_result = MagicMock()
     mock_result.id = task_id
-    mock_result.status = "success"  # This should be lowercase!
+    mock_result.status = SUCCESS  # Use Celery constant instead of string
     mock_result.successful.return_value = True
     mock_result.failed.return_value = False
     mock_result.ready.return_value = True
@@ -99,7 +99,6 @@ def test_get_terraform_status(
     assert content["task_id"] == task_id
     assert content["status"] == "success"  # Check the string value instead of enum
     assert content["outputs"]["database_url"] == "postgres://user:pass@hostname:5432/db"
-    assert content["task_id"] == task_id
     assert "credentials" in content
 
 
