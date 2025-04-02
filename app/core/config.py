@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional, Union
 import os
 import re
+import shutil
 from pathlib import Path
 
 from pydantic import AnyHttpUrl, field_validator, BaseModel
@@ -60,6 +61,7 @@ class Settings(BaseSettings):
     # Terraform Settings - Paths
     TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE: str = "app/terraform_files/createWarehouse"
     TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET: str = "app/terraform_files/createSuperset"
+    TERRAFORM_TASK_CONFIGS_PATH: str = "app/terraform_files/task_configs"
     
     # Celery and Redis settings
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
@@ -140,6 +142,112 @@ class Settings(BaseSettings):
         
         # Create and return the settings object
         return TerraformModuleSettings(**settings_dict)
+    
+    def create_task_specific_tfvars(self, module_path: str, task_id: str, replacements: Dict[str, Any] = None) -> str:
+        """
+        Create a task-specific terraform.tfvars file based on the original with optional replacements.
+        
+        Args:
+            module_path: Path to the terraform module directory
+            task_id: Unique task ID to use in the filename
+            replacements: Optional dictionary of key-value pairs to replace in the tfvars
+            
+        Returns:
+            Path to the task-specific tfvars file
+        """
+        # Ensure the task configs directory exists
+        os.makedirs(self.TERRAFORM_TASK_CONFIGS_PATH, exist_ok=True)
+        
+        # Convert paths to absolute paths
+        abs_module_path = os.path.abspath(module_path) if not os.path.isabs(module_path) else module_path
+        abs_task_configs_path = os.path.abspath(self.TERRAFORM_TASK_CONFIGS_PATH) if not os.path.isabs(self.TERRAFORM_TASK_CONFIGS_PATH) else self.TERRAFORM_TASK_CONFIGS_PATH
+        
+        # Determine module type (warehouse or superset)
+        if "createWarehouse" in abs_module_path or "warehouse" in abs_module_path.lower():
+            module_type = "warehouse"
+        else:
+            module_type = "superset"
+        
+        # Generate task-specific filename
+        task_tfvars_filename = f"{module_type}.{task_id}.tfvars"
+        task_tfvars_path = os.path.join(abs_task_configs_path, task_tfvars_filename)
+        
+        # Path to original tfvars file
+        original_tfvars_path = os.path.join(abs_module_path, "terraform.tfvars")
+        
+        if not os.path.exists(original_tfvars_path):
+            raise FileNotFoundError(f"Original terraform.tfvars not found at {original_tfvars_path}")
+        
+        # Read the original file content
+        with open(original_tfvars_path, 'r') as f:
+            content = f.read()
+        
+        # Apply replacements if provided
+        if replacements:
+            # Process content line by line for more reliable replacements
+            lines = content.splitlines()
+            for i, line in enumerate(lines):
+                for key, value in replacements.items():
+                    # Check if this line contains the key we want to replace
+                    if re.match(rf"^\s*{key}\s*=", line):
+                        # Format the value based on type
+                        if isinstance(value, str) and not value.isdigit():
+                            formatted_value = f'"{value}"'
+                        elif isinstance(value, bool):
+                            formatted_value = str(value).lower()  # Ensure booleans are lowercase
+                        else:
+                            formatted_value = str(value)
+                        
+                        # Replace the line
+                        lines[i] = re.sub(r"=\s*.*$", f"= {formatted_value}", line)
+                        break  # Found match for this key, move to next line
+            
+            # Rebuild content from modified lines
+            content = "\n".join(lines)
+        
+        # Write the modified content to the task-specific file
+        with open(task_tfvars_path, 'w') as f:
+            f.write(content)
+        
+        return task_tfvars_path
+    
+    def get_task_tfvars_path(self, module_type: str, task_id: str) -> str:
+        """
+        Get the path to a task-specific tfvars file
+        
+        Args:
+            module_type: Either 'warehouse' or 'superset'
+            task_id: The unique task ID
+            
+        Returns:
+            Path to the task-specific tfvars file
+        """
+        task_tfvars_filename = f"{module_type}.{task_id}.tfvars"
+        return os.path.join(self.TERRAFORM_TASK_CONFIGS_PATH, task_tfvars_filename)
+    
+    def cleanup_task_tfvars(self, task_id: str = None) -> None:
+        """
+        Clean up task-specific tfvars files
+        
+        Args:
+            task_id: If provided, only delete files for this task ID.
+                    If None, delete all task-specific tfvars files.
+        """
+        if not os.path.exists(self.TERRAFORM_TASK_CONFIGS_PATH):
+            return
+            
+        if task_id:
+            # Delete specific task files
+            for module_type in ['warehouse', 'superset']:
+                task_tfvars_path = self.get_task_tfvars_path(module_type, task_id)
+                if os.path.exists(task_tfvars_path):
+                    os.remove(task_tfvars_path)
+        else:
+            # Delete all task files (be careful with this!)
+            for filename in os.listdir(self.TERRAFORM_TASK_CONFIGS_PATH):
+                if filename.endswith('.tfvars'):
+                    file_path = os.path.join(self.TERRAFORM_TASK_CONFIGS_PATH, filename)
+                    os.remove(file_path)
 
 
 settings = Settings() 

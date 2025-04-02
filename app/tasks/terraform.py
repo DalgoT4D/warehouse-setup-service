@@ -1,6 +1,7 @@
 import os
 import subprocess
 import json
+import shutil
 from typing import Dict, Any
 from celery import Task
 from celery.utils.log import get_task_logger
@@ -18,19 +19,39 @@ class TerraformTask(Task):
     def on_failure(self, exc, task_id, args, kwargs, einfo):
         """Handle task failure by updating job status"""
         logger.error(f"Terraform task {task_id} failed: {exc}")
+        # Clean up task-specific tfvars file
+        try:
+            settings.cleanup_task_tfvars(task_id)
+        except Exception as e:
+            logger.error(f"Failed to clean up task tfvars: {e}")
         super().on_failure(exc, task_id, args, kwargs, einfo)
+    
+    def on_success(self, retval, task_id, args, kwargs):
+        """Handle task success by cleaning up resources"""
+        try:
+            settings.cleanup_task_tfvars(task_id)
+        except Exception as e:
+            logger.error(f"Failed to clean up task tfvars: {e}")
+        return super().on_success(retval, task_id, args, kwargs)
 
 @celery_app.task(bind=True, base=TerraformTask)
-def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str] = None) -> Dict[str, Any]:
+def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str] = None, replacements: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Run a sequence of terraform commands (init, plan, apply) with proper error handling
     
     If init or plan fails, stops and returns error
     If apply fails, attempts to run terraform destroy and returns error
+    
+    Args:
+        terraform_path: Path to the terraform module directory
+        credentials: Credentials to include in the response (for DB access, etc.)
+        replacements: Dictionary of key-value pairs to replace in the tfvars file
     """
-    logger.info(f"Starting Terraform command sequence job {self.request.id}")
+    task_id = self.request.id
+    logger.info(f"Starting Terraform command sequence job {task_id}")
     logger.info(f"Current working directory: {os.getcwd()}")
     logger.info(f"Received credentials: {credentials}")
+    logger.info(f"Received replacements: {replacements}")
     
     # Update task state to STARTED (running)
     self.update_state(state='STARTED', meta={'status': 'running'})
@@ -45,14 +66,24 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
             terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET
         logger.info(f"Using fallback path from settings: {terraform_path}")
     
+    # Determine module type for task-specific file naming
+    if "createWarehouse" in terraform_path or "warehouse" in terraform_path.lower():
+        module_type = "warehouse"
+    else:
+        module_type = "superset"
+    
     main_tf_path = os.path.join(terraform_path, "main.tf")
-    tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
+    original_tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
+    
     logger.info(f"Looking for Terraform files at: {terraform_path}")
     logger.info(f"Main.tf path: {main_tf_path}")
-    logger.info(f"Terraform.tfvars path: {tfvars_path}")
+    logger.info(f"Original terraform.tfvars path: {original_tfvars_path}")
     logger.info(f"Directory exists: {os.path.exists(terraform_path)}")
     logger.info(f"Main.tf exists: {os.path.exists(main_tf_path)}")
-    logger.info(f"Terraform.tfvars exists: {os.path.exists(tfvars_path)}")
+    logger.info(f"terraform.tfvars exists: {os.path.exists(original_tfvars_path)}")
+    
+    # Path for task-specific tfvars file
+    task_tfvars_path = None
     
     try:
         if not os.path.exists(terraform_path):
@@ -77,31 +108,45 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "credentials": credentials
             }
             
-        # Read the tfvars file to check for SSH key
-        if os.path.exists(tfvars_path):
-            with open(tfvars_path, 'r') as f:
-                tfvars_content = f.read()
-            
-            # Load module settings to get SSH key path
-            module_settings = settings.get_terraform_module_settings(terraform_path)
-            ssh_key_path = module_settings.SSH_KEY_PATH
-            
-            # Extract SSH key path from tfvars or use the one from module settings
-            ssh_key_match = re.search(r'SSH_KEY\s*=\s*"([^"]+)"', tfvars_content)
-            if ssh_key_match:
-                ssh_key_path = ssh_key_match.group(1)
-                logger.info(f"SSH key path in tfvars: {ssh_key_path}")
-            else:
-                logger.info(f"Using SSH key path from module settings: {ssh_key_path}")
-                
-            # Check if SSH key exists
-            if not os.path.exists(ssh_key_path):
-                logger.error(f"SSH key not found at: {ssh_key_path}")
-                error_msg = f"Terraform apply would fail: SSH key not found at {ssh_key_path}"
-                
-                # We'll continue with execution but log the warning
-                logger.warning("Continuing with execution despite missing SSH key, expect terraform to fail")
+        # Load module settings to get SSH key path
+        module_settings = settings.get_terraform_module_settings(terraform_path)
+        logger.info(f"Loaded module settings: RDS Instance Name: {module_settings.RDS_INSTANCE_NAME}")
+        logger.info(f"SSH Key Path from module settings: {module_settings.SSH_KEY_PATH}")
         
+        # Check if SSH key exists
+        if not os.path.exists(module_settings.SSH_KEY_PATH):
+            logger.error(f"SSH key not found at: {module_settings.SSH_KEY_PATH}")
+            error_msg = f"Terraform apply would fail: SSH key not found at {module_settings.SSH_KEY_PATH}"
+            
+            # We'll continue with execution but log the warning
+            logger.warning("Continuing with execution despite missing SSH key, expect terraform to fail")
+        
+        # Create task-specific tfvars file
+        task_tfvars_path = settings.create_task_specific_tfvars(
+            terraform_path, 
+            task_id, 
+            replacements
+        )
+        logger.info(f"Created task-specific tfvars file at: {task_tfvars_path}")
+        
+        # Ensure task_tfvars_path is an absolute path
+        if not os.path.isabs(task_tfvars_path):
+            task_tfvars_path = os.path.abspath(task_tfvars_path)
+            logger.info(f"Using absolute path for tfvars file: {task_tfvars_path}")
+            
+        # Verify that the task-specific tfvars file exists
+        if not os.path.exists(task_tfvars_path):
+            error_msg = f"Task-specific tfvars file not found at: {task_tfvars_path}"
+            logger.error(error_msg)
+            return {
+                "status": "error",
+                "error": error_msg,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "credentials": credentials
+            }
+        
+        # Change to terraform directory
         os.chdir(terraform_path)
         
         # 1. Clean up any existing locks
@@ -161,10 +206,10 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "credentials": credentials
             }
         
-        # 3. Run terraform plan
-        logger.info("Running terraform plan")
+        # 3. Run terraform plan with task-specific var file
+        logger.info(f"Running terraform plan with task-specific var file: {task_tfvars_path}")
         plan_process = subprocess.run(
-            ["terraform", "plan"],
+            ["terraform", "plan", f"-var-file={task_tfvars_path}"],
             capture_output=True,
             text=True,
             check=False
@@ -174,7 +219,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
         if plan_process.returncode != 0 and "lock" in plan_process.stderr.lower():
             logger.warning("Terraform plan failed due to lock issue, retrying with -lock=false")
             plan_process = subprocess.run(
-                ["terraform", "plan", "-lock=false"],
+                ["terraform", "plan", f"-var-file={task_tfvars_path}", "-lock=false"],
                 capture_output=True,
                 text=True,
                 check=False
@@ -196,10 +241,10 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "credentials": credentials
             }
         
-        # 4. Run terraform apply
-        logger.info("Running terraform apply")
+        # 4. Run terraform apply with task-specific var file
+        logger.info(f"Running terraform apply with task-specific var file: {task_tfvars_path}")
         apply_process = subprocess.run(
-            ["terraform", "apply", "-auto-approve"],
+            ["terraform", "apply", "-auto-approve", f"-var-file={task_tfvars_path}"],
             capture_output=True,
             text=True,
             check=False
@@ -209,7 +254,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
         if apply_process.returncode != 0 and "lock" in apply_process.stderr.lower():
             logger.warning("Terraform apply failed due to lock issue, retrying with -lock=false")
             apply_process = subprocess.run(
-                ["terraform", "apply", "-auto-approve", "-lock=false"],
+                ["terraform", "apply", "-auto-approve", f"-var-file={task_tfvars_path}", "-lock=false"],
                 capture_output=True,
                 text=True,
                 check=False
@@ -223,7 +268,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
             # Attempt to destroy resources to avoid dangling infrastructure
             logger.info("Apply failed, attempting to run terraform destroy for cleanup")
             destroy_process = subprocess.run(
-                ["terraform", "destroy", "-auto-approve"],
+                ["terraform", "destroy", "-auto-approve", f"-var-file={task_tfvars_path}"],
                 capture_output=True,
                 text=True,
                 check=False
@@ -242,13 +287,14 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
             # For demonstration, we'll simulate success with credentials even though there was an error
             # In a production environment, you would handle this differently
             if credentials:
-                logger.info("Simulating successful credentials return despite Terraform error for demo purposes")
+                logger.info("Returning credentials for users despite error, but setting status to error")
                 return {
-                    "status": "success",
+                    "status": "error",
                     "init_output": init_process.stdout,
                     "plan_output": plan_process.stdout,
-                    "apply_output": "Simulated success for demonstration purposes. Original error: " + error_msg,
+                    "apply_output": "Error: " + error_msg,
                     "outputs": {},
+                    "error": error_msg,
                     "credentials": credentials,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "completed_at": datetime.now(timezone.utc).isoformat()
@@ -308,3 +354,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "credentials": credentials
         }
+    finally:
+        # Clean up task-specific tfvars file if needed
+        # We leave the cleanup to the on_success/on_failure handlers
+        pass

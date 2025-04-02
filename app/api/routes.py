@@ -207,21 +207,14 @@ async def create_postgres_db(payload: PostgresDBRequest):
         # Generate secure password for APP_DB_PASS
         db_password = generate_secure_password()
         
-        # Update the terraform.tfvars file with dbname and generated password
+        # Prepare replacements for tfvars file (will be used to create task-specific file)
         replacements = {
             "APP_DB_NAME": payload.dbname,
             "APP_DB_USER": f"{payload.dbname}_user",
             "APP_DB_PASS": db_password
         }
         
-        logger.info(f"Updating tfvars with: {replacements}")
-        
-        if not update_tfvars_with_org_slug(tfvars_path, replacements):
-            logger.error("Failed to update terraform variables")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to update terraform variables"
-            )
+        logger.info(f"Prepared replacements for task-specific tfvars: {replacements}")
         
         # Get host and port from module settings
         host = module_settings.get_rds_hostname()
@@ -238,8 +231,12 @@ async def create_postgres_db(payload: PostgresDBRequest):
         
         logger.info(f"Passing credentials to task: {credentials}")
         
-        # Start the Celery task with the run_terraform_commands function
-        task = run_terraform_commands.delay(terraform_path, credentials)
+        # Start the Celery task with the run_terraform_commands function,
+        # passing replacements to create a task-specific tfvars file
+        task = run_terraform_commands.apply_async(
+            args=[terraform_path, credentials, replacements],
+            queue='terraform'
+        )
         
         logger.info(f"Task started with ID: {task.id}")
         
@@ -284,7 +281,7 @@ async def create_superset(payload: SupersetRequest):
         db_password = generate_secure_password()
         secret_key = generate_secure_password(32)
         
-        # Update the terraform.tfvars file with org_slug and generated passwords
+        # Prepare replacements for tfvars file (will be used to create task-specific file)
         replacements = {
             "CLIENT_NAME": payload.org_slug,
             "OUTPUT_DIR": f"../../../{payload.org_slug}",
@@ -296,14 +293,7 @@ async def create_superset(payload: SupersetRequest):
             "neworg_name": f"{payload.org_slug}.dalgo.org"
         }
         
-        logger.info(f"Updating tfvars with: {replacements}")
-        
-        if not update_tfvars_with_org_slug(tfvars_path, replacements):
-            logger.error("Failed to update terraform variables")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to update terraform variables"
-            )
+        logger.info(f"Prepared replacements for task-specific tfvars: {replacements}")
         
         # Store credentials with the task
         credentials = {
@@ -314,9 +304,10 @@ async def create_superset(payload: SupersetRequest):
         
         logger.info(f"Passing credentials to task: {credentials}")
         
-        # Start the Celery task with the run_terraform_commands function
+        # Start the Celery task with the run_terraform_commands function,
+        # passing replacements to create a task-specific tfvars file
         task = run_terraform_commands.apply_async(
-            args=[terraform_path, credentials],
+            args=[terraform_path, credentials, replacements],
             queue='terraform'
         )
         
