@@ -44,17 +44,29 @@ def generate_secure_password(length=16):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 def update_tfvars_with_org_slug(file_path, replacements):
-    """Update terraform.tfvars file with org_slug"""
+    """Update terraform.tfvars file with dynamic values"""
     try:
         # Read the file
         with open(file_path, 'r') as file:
             content = file.read()
         
         # Make replacements
-        for key, value_template in replacements.items():
-            # Create regex to find the variable assignment
-            pattern = rf'^({key}\s*=\s*)"[^"]*"(.*)$'
-            replacement = rf'\1"{value_template}"\2'
+        for key, value in replacements.items():
+            # Check if the value should include quotes (strings)
+            if isinstance(value, str) and value.startswith('"') and value.endswith('"'):
+                # String value with quotes already included
+                pattern = rf'^({key}\s*=\s*).*$'
+                replacement = rf'\1{value}'
+            elif isinstance(value, str) and not value.isdigit():
+                # Regular string, add quotes
+                pattern = rf'^({key}\s*=\s*).*$'
+                replacement = rf'\1"{value}"'
+            else:
+                # Numbers or other values without quotes
+                pattern = rf'^({key}\s*=\s*).*$'
+                replacement = rf'\1{value}'
+            
+            # Apply the replacement with multiline mode
             content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
         
         # Write back to file
@@ -123,6 +135,50 @@ async def health_check():
     """Health check endpoint to verify that the API is functioning"""
     return {"status": "ok", "message": "API is healthy"}
 
+# Debug endpoint to show computed credentials
+@health_router.get("/debug/credentials/{dbname}")
+async def debug_credentials(dbname: str):
+    """Debug endpoint to show what credentials would be created for a given database name"""
+    try:
+        terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE
+        tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
+        
+        if not os.path.exists(tfvars_path):
+            return {"error": f"Terraform vars file not found: {tfvars_path}"}
+        
+        # Load module-specific settings
+        module_settings = settings.get_terraform_module_settings(terraform_path)
+        
+        # Get host and port from module settings
+        host = module_settings.get_rds_hostname()
+        port = str(module_settings.DB_PORT)
+        
+        # Generate sample credentials
+        db_password = "SAMPLE_PASSWORD_NOT_REAL"
+        credentials = {
+            "dbname": dbname,
+            "host": host,
+            "port": port,
+            "user": f"{dbname}_user",
+            "password": db_password
+        }
+        
+        # Show environment settings
+        env_settings = {
+            "rds_instance_name": module_settings.RDS_INSTANCE_NAME,
+            "rds_domain": module_settings.RDS_DOMAIN,
+            "db_port": module_settings.DB_PORT,
+            "terraform_path": terraform_path,
+            "tfvars_path": tfvars_path
+        }
+        
+        return {
+            "credentials": credentials,
+            "environment_settings": env_settings,
+            "module_tfvars_file": os.path.join(terraform_path, "terraform.tfvars")
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 # PostgreSQL database creation endpoint
 @infra_router.post("/postgres/db", response_model=TerraformResponse)
@@ -144,15 +200,18 @@ async def create_postgres_db(payload: PostgresDBRequest):
                 detail=f"Terraform vars file not found: {tfvars_path}"
             )
         
+        # Load module-specific settings
+        module_settings = settings.get_terraform_module_settings(terraform_path)
+        logger.info(f"Loaded module settings for: {terraform_path}")
+        
         # Generate secure password for APP_DB_PASS
         db_password = generate_secure_password()
         
         # Update the terraform.tfvars file with dbname and generated password
-        db_user = f"{payload.dbname}_user"
         replacements = {
             "APP_DB_NAME": payload.dbname,
-            "APP_DB_USER": db_user,
-            "APP_DB_PASS": db_password,
+            "APP_DB_USER": f"{payload.dbname}_user",
+            "APP_DB_PASS": db_password
         }
         
         logger.info(f"Updating tfvars with: {replacements}")
@@ -164,45 +223,16 @@ async def create_postgres_db(payload: PostgresDBRequest):
                 detail="Failed to update terraform variables"
             )
         
-        # Extract host and port from terraform.tfvars
-        host = "localhost"  # Default value
-        port = "5432"       # Default value
-        rds_name = None     # Will be used to construct the hostname
-        
-        try:
-            with open(tfvars_path, 'r') as file:
-                content = file.read()
-                
-                # Look for RDS instance name to construct hostname
-                rds_match = re.search(r'rdsname\s*=\s*"([^"]*)"', content)
-                if rds_match:
-                    rds_name = rds_match.group(1)
-                    # Construct AWS RDS hostname using the RDS instance name
-                    host = f"{rds_name}.cwqixp4vwhou.us-east-1.rds.amazonaws.com"
-                    logger.info(f"Constructed RDS hostname: {host}")
-                else:
-                    logger.warning("RDS instance name not found in tfvars, using default host")
-                
-                # Look for port variable (DB_PORT, not APP_DB_PORT)
-                port_match = re.search(r'DB_PORT\s*=\s*(\d+)', content)
-                if port_match:
-                    port = port_match.group(1)
-                    logger.info(f"Found DB port: {port}")
-                else:
-                    logger.warning("DB_PORT not found in tfvars, using default port 5432")
-                
-                # Log the contents of the tfvars file for debugging
-                logger.debug(f"terraform.tfvars content: {content}")
-                
-        except Exception as e:
-            logger.warning(f"Could not extract host/port from tfvars: {e}")
+        # Get host and port from module settings
+        host = module_settings.get_rds_hostname()
+        port = str(module_settings.DB_PORT)
         
         # Store credentials with the task
         credentials = {
             "dbname": payload.dbname,
             "host": host,
             "port": port,
-            "user": db_user, 
+            "user": f"{payload.dbname}_user",
             "password": db_password
         }
         
@@ -234,7 +264,7 @@ async def create_superset(payload: SupersetRequest):
         terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET
         tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
         
-        logger.info(f"Creating Superset instance for org_slug: {payload.org_slug}")
+        logger.info(f"Creating Superset for organization: {payload.org_slug}")
         logger.info(f"Terraform path: {terraform_path}")
         logger.info(f"Terraform vars path: {tfvars_path}")
         
@@ -245,20 +275,24 @@ async def create_superset(payload: SupersetRequest):
                 detail=f"Terraform vars file not found: {tfvars_path}"
             )
         
+        # Load module-specific settings
+        module_settings = settings.get_terraform_module_settings(terraform_path)
+        logger.info(f"Loaded module settings for: {terraform_path}")
+        
         # Generate secure passwords
-        secret_key = generate_secure_password(32)
         admin_password = generate_secure_password()
         db_password = generate_secure_password()
+        secret_key = generate_secure_password(32)
         
         # Update the terraform.tfvars file with org_slug and generated passwords
         replacements = {
-            "CLIENT_NAME": f"{payload.org_slug}",
+            "CLIENT_NAME": payload.org_slug,
             "OUTPUT_DIR": f"../../../{payload.org_slug}",
-            "APP_DB_USER": f"superset_{payload.org_slug}",
-            "APP_DB_NAME": f"superset_{payload.org_slug}",
             "SUPERSET_SECRET_KEY": secret_key,
             "SUPERSET_ADMIN_PASSWORD": admin_password,
+            "APP_DB_USER": f"superset_{payload.org_slug}",
             "APP_DB_PASS": db_password,
+            "APP_DB_NAME": f"superset_{payload.org_slug}",
             "neworg_name": f"{payload.org_slug}.dalgo.org"
         }
         
@@ -273,14 +307,9 @@ async def create_superset(payload: SupersetRequest):
         
         # Store credentials with the task
         credentials = {
-            "client_name": f"{payload.org_slug}",
-            "db_name": f"superset_{payload.org_slug}",
-            "db_user": f"superset_{payload.org_slug}",
-            "db_password": db_password,
-            "admin": "admin",
-            "admin_password": admin_password,
-            "secret_key": secret_key,
-            "neworg_name": f"{payload.org_slug}.dalgo.org"
+            "superset_url": f"https://{payload.org_slug}.dalgo.org",
+            "admin_username": module_settings.SUPERSET_ADMIN_USERNAME,
+            "admin_password": admin_password
         }
         
         logger.info(f"Passing credentials to task: {credentials}")

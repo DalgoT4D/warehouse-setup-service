@@ -35,15 +35,15 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
     # Update task state to STARTED (running)
     self.update_state(state='STARTED', meta={'status': 'running'})
     
-    # Verify terraform_path exists or use fallback
+    # Verify terraform_path exists or use fallback from settings
     if not os.path.exists(terraform_path):
         logger.warning(f"Path does not exist: {terraform_path}")
         # Check if this is for warehouse or superset based on the path
         if "createWarehouse" in terraform_path or "warehouse" in terraform_path.lower():
-            terraform_path = "/Users/himanshut4d/Documents/Tech4Dev/Dalgo/warehouse_setup/app/terraform_files/createWarehouse"
+            terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE
         else:
-            terraform_path = "/Users/himanshut4d/Documents/Tech4Dev/Dalgo/warehouse_setup/app/terraform_files/createSuperset"
-        logger.info(f"Using fallback path: {terraform_path}")
+            terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET
+        logger.info(f"Using fallback path from settings: {terraform_path}")
     
     main_tf_path = os.path.join(terraform_path, "main.tf")
     tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
@@ -82,19 +82,25 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
             with open(tfvars_path, 'r') as f:
                 tfvars_content = f.read()
             
-            # Extract SSH key path
+            # Load module settings to get SSH key path
+            module_settings = settings.get_terraform_module_settings(terraform_path)
+            ssh_key_path = module_settings.SSH_KEY_PATH
+            
+            # Extract SSH key path from tfvars or use the one from module settings
             ssh_key_match = re.search(r'SSH_KEY\s*=\s*"([^"]+)"', tfvars_content)
             if ssh_key_match:
                 ssh_key_path = ssh_key_match.group(1)
                 logger.info(f"SSH key path in tfvars: {ssh_key_path}")
+            else:
+                logger.info(f"Using SSH key path from module settings: {ssh_key_path}")
                 
-                # Check if SSH key exists
-                if not os.path.exists(ssh_key_path):
-                    logger.error(f"SSH key not found at: {ssh_key_path}")
-                    error_msg = f"Terraform apply would fail: SSH key not found at {ssh_key_path}"
-                    
-                    # We'll continue with execution but log the warning
-                    logger.warning("Continuing with execution despite missing SSH key, expect terraform to fail")
+            # Check if SSH key exists
+            if not os.path.exists(ssh_key_path):
+                logger.error(f"SSH key not found at: {ssh_key_path}")
+                error_msg = f"Terraform apply would fail: SSH key not found at {ssh_key_path}"
+                
+                # We'll continue with execution but log the warning
+                logger.warning("Continuing with execution despite missing SSH key, expect terraform to fail")
         
         os.chdir(terraform_path)
         
