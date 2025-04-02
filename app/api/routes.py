@@ -31,7 +31,7 @@ health_router = APIRouter()
 # Request models
 class PostgresDBRequest(BaseModel):
     """Request model for PostgreSQL database creation"""
-    org_slug: str
+    dbname: str
 
 class SupersetRequest(BaseModel):
     """Request model for Superset creation"""
@@ -126,13 +126,13 @@ async def health_check():
 # PostgreSQL database creation endpoint
 @infra_router.post("/postgres/db", response_model=TerraformResponse)
 async def create_postgres_db(payload: PostgresDBRequest):
-    """Create a new PostgreSQL database with the provided organization slug"""
+    """Create a new PostgreSQL database with the provided database name"""
     try:
         # Get the terraform.tfvars file path
         terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE
         tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
         
-        logger.info(f"Creating PostgreSQL database for org_slug: {payload.org_slug}")
+        logger.info(f"Creating PostgreSQL database: {payload.dbname}")
         logger.info(f"Terraform path: {terraform_path}")
         logger.info(f"Terraform vars path: {tfvars_path}")
         
@@ -146,10 +146,10 @@ async def create_postgres_db(payload: PostgresDBRequest):
         # Generate secure password for APP_DB_PASS
         db_password = generate_secure_password()
         
-        # Update the terraform.tfvars file with org_slug and generated password
+        # Update the terraform.tfvars file with dbname and generated password
         replacements = {
-            "APP_DB_NAME": f"warehouse_{payload.org_slug}",
-            "APP_DB_USER": f"warehouse_{payload.org_slug}",
+            "APP_DB_NAME": payload.dbname,
+            "APP_DB_USER": f"{payload.dbname}_user",
             "APP_DB_PASS": db_password,
         }
         
@@ -162,11 +162,33 @@ async def create_postgres_db(payload: PostgresDBRequest):
                 detail="Failed to update terraform variables"
             )
         
+        # Try to extract host and port from terraform.tfvars
+        host = "localhost"  # Default value
+        port = "5432"       # Default value
+        
+        try:
+            with open(tfvars_path, 'r') as file:
+                content = file.read()
+                
+                # Look for host variable
+                host_match = re.search(r'APP_DB_HOST\s*=\s*"([^"]*)"', content)
+                if host_match:
+                    host = host_match.group(1)
+                
+                # Look for port variable
+                port_match = re.search(r'APP_DB_PORT\s*=\s*"([^"]*)"', content)
+                if port_match:
+                    port = port_match.group(1)
+        except Exception as e:
+            logger.warning(f"Could not extract host/port from tfvars: {e}")
+        
         # Store credentials with the task
         credentials = {
-            "db_name": f"warehouse_{payload.org_slug}",
-            "db_user": f"warehouse_{payload.org_slug}",
-            "db_password": db_password
+            "dbname": payload.dbname,
+            "host": host,
+            "port": port,
+            "user": payload.dbname,
+            "password": db_password
         }
         
         logger.info(f"Passing credentials to task: {credentials}")

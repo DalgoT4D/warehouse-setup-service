@@ -29,7 +29,7 @@ def test_run_terraform(
     mock_task.id = "mocked-task-id"
     mock_delay.return_value = mock_task
     
-    response = test_client.post("/api/infra/postgres/db", json={"org_slug": "test-org"}, headers=api_key_headers)
+    response = test_client.post("/api/infra/postgres/db", json={"dbname": "test-db"}, headers=api_key_headers)
     assert response.status_code == 200
     
     content = response.json()
@@ -53,7 +53,7 @@ def test_run_terraform_path_not_found(
     # Mock the path exists check to return False
     mock_exists.return_value = False
     
-    response = test_client.post("/api/infra/postgres/db", json={"org_slug": "test-org"}, headers=api_key_headers)
+    response = test_client.post("/api/infra/postgres/db", json={"dbname": "test-db"}, headers=api_key_headers)
     assert response.status_code == 500  # Now expecting 500 since we're handling it as an internal error
     assert "not found" in response.json()["detail"].lower()
 
@@ -62,7 +62,7 @@ def test_run_terraform_unauthorized(test_client: TestClient) -> None:
     """
     Test terraform endpoint without API key.
     """
-    response = test_client.post("/api/infra/postgres/db", json={"org_slug": "test-org"})
+    response = test_client.post("/api/infra/postgres/db", json={"dbname": "test-db"})
     assert response.status_code == 401
     assert "Invalid API Key" in response.json()["detail"]
 
@@ -87,7 +87,13 @@ def test_get_terraform_status(
     mock_result.ready.return_value = True
     mock_result.result = {
         "outputs": {"database_url": "postgres://user:pass@hostname:5432/db"},
-        "credentials": {"db_user": "test_user", "db_password": "test_password"}
+        "credentials": {
+            "dbname": "test-db",
+            "host": "hostname",
+            "port": "5432",
+            "user": "test-db",
+            "password": "test_password"
+        }
     }
     
     mock_async_result.return_value = mock_result
@@ -100,6 +106,11 @@ def test_get_terraform_status(
     assert content["status"] == "success"  # Check the string value instead of enum
     assert content["outputs"]["database_url"] == "postgres://user:pass@hostname:5432/db"
     assert "credentials" in content
+    assert "dbname" in content["credentials"]
+    assert "host" in content["credentials"]
+    assert "port" in content["credentials"]
+    assert "user" in content["credentials"]
+    assert "password" in content["credentials"]
 
 
 @patch("app.api.routes.AsyncResult")
