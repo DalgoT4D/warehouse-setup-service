@@ -146,12 +146,9 @@ async def create_postgres_db(request: PostgresDBRequest):
         
         logger.info(f"Task started with ID: {task.id}")
         
-        # Create a response using the task ID as job_id
+        # Create a response using the task ID as task_id
         return TerraformResponse(
-            job_id=task.id,
-            status=TerraformStatus.PENDING,
-            message=get_status_message(TerraformStatus.PENDING),
-            created_at=time.time()
+            task_id=task.id,
         )
 
     except Exception as e:
@@ -229,12 +226,9 @@ async def create_superset(request: SupersetRequest):
         
         logger.info(f"Task started with ID: {task.id}")
         
-        # Create a response using the task ID as job_id
+        # Create a response using the task ID as task_id
         return TerraformResponse(
-            job_id=task.id,
-            status=TerraformStatus.PENDING,
-            message=get_status_message(TerraformStatus.PENDING),
-            created_at=time.time()
+            task_id=task.id,
         )
 
     except Exception as e:
@@ -312,14 +306,13 @@ async def get_task_status(task_id: str) -> Any:
     
     # Create status response
     response = TerraformJobStatusResponse(
-        job_id=task_id,
+        task_id=task_id,
         status=terraform_status,
         message=get_status_message(terraform_status, error),
         error=error,
         created_at=datetime.now(timezone.utc),  # Not available from AsyncResult directly
         completed_at=datetime.now(timezone.utc) if task_result.ready() else None,  # Use ready() to check completion
         outputs=outputs,
-        task_id=task_id,
         credentials=credentials
     )
     

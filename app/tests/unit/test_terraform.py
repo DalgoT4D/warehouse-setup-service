@@ -32,7 +32,7 @@ def test_run_terraform(
     assert response.status_code == 200
     
     content = response.json()
-    assert content["job_id"] == mock_task.id
+    assert content["task_id"] == mock_task.id
     assert content["status"] == TerraformStatus.PENDING
     assert "message" in content
     
@@ -96,7 +96,7 @@ def test_get_terraform_status(
     assert response.status_code == 200
     
     content = response.json()
-    assert content["job_id"] == task_id
+    assert content["task_id"] == task_id
     assert content["status"] == "success"  # Check the string value instead of enum
     assert content["outputs"]["database_url"] == "postgres://user:pass@hostname:5432/db"
     assert content["task_id"] == task_id

@@ -14,7 +14,7 @@ class TerraformStatus(str, Enum):
 
 class TerraformResponse(BaseModel):
     """Response model for Terraform operations"""
-    job_id: str
+    task_id: str
     status: TerraformStatus
     message: str
     error: Optional[str] = None
@@ -23,7 +23,7 @@ class TerraformResponse(BaseModel):
 
 class TerraformJobStatusResponse(BaseModel):
     """Response model for job status query"""
-    job_id: str
+    task_id: str
     status: TerraformStatus
     message: str
     error: Optional[str] = None
@@ -36,7 +36,7 @@ class TerraformJobStatusResponse(BaseModel):
 
 class TerraformResult(BaseModel):
     """Detailed result of a terraform operation"""
-    job_id: str
+    task_id: str
     status: TerraformStatus
     init_output: Optional[str] = None
     apply_output: Optional[str] = None

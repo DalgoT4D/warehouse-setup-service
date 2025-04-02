@@ -103,7 +103,7 @@ This endpoint will run a Terraform script located at `/create-warehouse` path to
 **Response:**
 ```json
 {
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "pending",
   "message": "Terraform job is pending execution",
   "created_at": "2023-04-25T14:30:45.123456",
@@ -114,7 +114,7 @@ This endpoint will run a Terraform script located at `/create-warehouse` path to
 #### Check a Terraform job status:
 
 ```
-GET /api/v1/terraform/status/{job_id}
+GET /api/v1/terraform/status/{task_id}
 ```
 
 Required header: `X-API-Key: your_api_key`
@@ -130,7 +130,7 @@ When a job is complete, the response includes any outputs from the Terraform scr
 **Sample success response:**
 ```json
 {
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "success",
   "message": "Terraform job completed successfully",
   "created_at": "2023-04-25T14:30:45.123456",
