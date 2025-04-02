@@ -95,14 +95,14 @@ async def health_check():
 
 # PostgreSQL database creation endpoint
 @infra_router.post("/postgres/db", response_model=TerraformResponse)
-async def create_postgres_db(request: PostgresDBRequest):
+async def create_postgres_db(payload: PostgresDBRequest):
     """Create a new PostgreSQL database with the provided organization slug"""
     try:
         # Get the terraform.tfvars file path
         terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE
         tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
         
-        logger.info(f"Creating PostgreSQL database for org_slug: {request.org_slug}")
+        logger.info(f"Creating PostgreSQL database for org_slug: {payload.org_slug}")
         logger.info(f"Terraform path: {terraform_path}")
         logger.info(f"Terraform vars path: {tfvars_path}")
         
@@ -118,8 +118,8 @@ async def create_postgres_db(request: PostgresDBRequest):
         
         # Update the terraform.tfvars file with org_slug and generated password
         replacements = {
-            "APP_DB_NAME": f"warehouse_{request.org_slug}",
-            "APP_DB_USER": f"warehouse_{request.org_slug}",
+            "APP_DB_NAME": f"warehouse_{payload.org_slug}",
+            "APP_DB_USER": f"warehouse_{payload.org_slug}",
             "APP_DB_PASS": db_password,
         }
         
@@ -134,8 +134,8 @@ async def create_postgres_db(request: PostgresDBRequest):
         
         # Store credentials with the task
         credentials = {
-            "db_name": f"warehouse_{request.org_slug}",
-            "db_user": f"warehouse_{request.org_slug}",
+            "db_name": f"warehouse_{payload.org_slug}",
+            "db_user": f"warehouse_{payload.org_slug}",
             "db_password": db_password
         }
         
@@ -160,14 +160,14 @@ async def create_postgres_db(request: PostgresDBRequest):
 
 # Superset creation endpoint
 @infra_router.post("/superset", response_model=TerraformResponse)
-async def create_superset(request: SupersetRequest):
+async def create_superset(payload: SupersetRequest):
     """Create a new Superset instance with the provided organization slug"""
     try:
         # Get the terraform.tfvars file path
         terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET
         tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
         
-        logger.info(f"Creating Superset instance for org_slug: {request.org_slug}")
+        logger.info(f"Creating Superset instance for org_slug: {payload.org_slug}")
         logger.info(f"Terraform path: {terraform_path}")
         logger.info(f"Terraform vars path: {tfvars_path}")
         
@@ -185,14 +185,14 @@ async def create_superset(request: SupersetRequest):
         
         # Update the terraform.tfvars file with org_slug and generated passwords
         replacements = {
-            "CLIENT_NAME": f"{request.org_slug}",
-            "OUTPUT_DIR": f"../../../{request.org_slug}",
-            "APP_DB_USER": f"superset_{request.org_slug}",
-            "APP_DB_NAME": f"superset_{request.org_slug}",
+            "CLIENT_NAME": f"{payload.org_slug}",
+            "OUTPUT_DIR": f"../../../{payload.org_slug}",
+            "APP_DB_USER": f"superset_{payload.org_slug}",
+            "APP_DB_NAME": f"superset_{payload.org_slug}",
             "SUPERSET_SECRET_KEY": secret_key,
             "SUPERSET_ADMIN_PASSWORD": admin_password,
             "APP_DB_PASS": db_password,
-            "neworg_name": f"{request.org_slug}.dalgo.org"
+            "neworg_name": f"{payload.org_slug}.dalgo.org"
         }
         
         logger.info(f"Updating tfvars with: {replacements}")
@@ -206,14 +206,14 @@ async def create_superset(request: SupersetRequest):
         
         # Store credentials with the task
         credentials = {
-            "client_name": f"{request.org_slug}",
-            "db_name": f"superset_{request.org_slug}",
-            "db_user": f"superset_{request.org_slug}",
+            "client_name": f"{payload.org_slug}",
+            "db_name": f"superset_{payload.org_slug}",
+            "db_user": f"superset_{payload.org_slug}",
             "db_password": db_password,
             "admin": "admin",
             "admin_password": admin_password,
             "secret_key": secret_key,
-            "neworg_name": f"{request.org_slug}.dalgo.org"
+            "neworg_name": f"{payload.org_slug}.dalgo.org"
         }
         
         logger.info(f"Passing credentials to task: {credentials}")

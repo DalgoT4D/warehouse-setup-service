@@ -171,7 +171,7 @@ app/
 ├── api/
 │   └── v1/         # API v1 endpoints
 ├── core/           # Core application components 
-├── schemas/        # Pydantic models for request/response validation
+├── schemas/        # Pydantic models for payload/response validation
 ├── services/       # Business logic
 ├── tasks/          # Celery tasks
 └── tests/          # Test suite
