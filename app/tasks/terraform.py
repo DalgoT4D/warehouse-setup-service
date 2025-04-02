@@ -28,7 +28,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
     If init or plan fails, stops and returns error
     If apply fails, attempts to run terraform destroy and returns error
     """
-    logger.info(f"Starting Terraform command sequence job {self.payload.id}")
+    logger.info(f"Starting Terraform command sequence job {self.request.id}")
     logger.info(f"Current working directory: {os.getcwd()}")
     logger.info(f"Received credentials: {credentials}")
     

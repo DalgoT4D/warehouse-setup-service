@@ -123,6 +123,7 @@ async def health_check():
     """Health check endpoint to verify that the API is functioning"""
     return {"status": "ok", "message": "API is healthy"}
 
+
 # PostgreSQL database creation endpoint
 @infra_router.post("/postgres/db", response_model=TerraformResponse)
 async def create_postgres_db(payload: PostgresDBRequest):
@@ -147,9 +148,10 @@ async def create_postgres_db(payload: PostgresDBRequest):
         db_password = generate_secure_password()
         
         # Update the terraform.tfvars file with dbname and generated password
+        db_user = f"{payload.dbname}_user"
         replacements = {
             "APP_DB_NAME": payload.dbname,
-            "APP_DB_USER": f"{payload.dbname}_user",
+            "APP_DB_USER": db_user,
             "APP_DB_PASS": db_password,
         }
         
@@ -162,23 +164,36 @@ async def create_postgres_db(payload: PostgresDBRequest):
                 detail="Failed to update terraform variables"
             )
         
-        # Try to extract host and port from terraform.tfvars
+        # Extract host and port from terraform.tfvars
         host = "localhost"  # Default value
         port = "5432"       # Default value
+        rds_name = None     # Will be used to construct the hostname
         
         try:
             with open(tfvars_path, 'r') as file:
                 content = file.read()
                 
-                # Look for host variable
-                host_match = re.search(r'APP_DB_HOST\s*=\s*"([^"]*)"', content)
-                if host_match:
-                    host = host_match.group(1)
+                # Look for RDS instance name to construct hostname
+                rds_match = re.search(r'rdsname\s*=\s*"([^"]*)"', content)
+                if rds_match:
+                    rds_name = rds_match.group(1)
+                    # Construct AWS RDS hostname using the RDS instance name
+                    host = f"{rds_name}.cwqixp4vwhou.us-east-1.rds.amazonaws.com"
+                    logger.info(f"Constructed RDS hostname: {host}")
+                else:
+                    logger.warning("RDS instance name not found in tfvars, using default host")
                 
-                # Look for port variable
-                port_match = re.search(r'APP_DB_PORT\s*=\s*"([^"]*)"', content)
+                # Look for port variable (DB_PORT, not APP_DB_PORT)
+                port_match = re.search(r'DB_PORT\s*=\s*(\d+)', content)
                 if port_match:
                     port = port_match.group(1)
+                    logger.info(f"Found DB port: {port}")
+                else:
+                    logger.warning("DB_PORT not found in tfvars, using default port 5432")
+                
+                # Log the contents of the tfvars file for debugging
+                logger.debug(f"terraform.tfvars content: {content}")
+                
         except Exception as e:
             logger.warning(f"Could not extract host/port from tfvars: {e}")
         
@@ -187,7 +202,7 @@ async def create_postgres_db(payload: PostgresDBRequest):
             "dbname": payload.dbname,
             "host": host,
             "port": port,
-            "user": payload.dbname,
+            "user": db_user, 
             "password": db_password
         }
         

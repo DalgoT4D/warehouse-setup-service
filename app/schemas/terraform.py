@@ -15,10 +15,6 @@ class TerraformStatus(str, Enum):
 class TerraformResponse(BaseModel):
     """Response model for Terraform operations"""
     task_id: str
-    status: TerraformStatus = TerraformStatus.PENDING
-    message: str = "Terraform job is pending execution"
-    error: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class TerraformJobStatusResponse(BaseModel):
