@@ -18,7 +18,7 @@ def test_run_terraform(
     api_key_headers: Dict[str, str]
 ) -> None:
     """
-    Test running terraform apply endpoint.
+    Test running terraform apply endpoint for PostgreSQL database creation.
     """
     # Mock the path exists check
     mock_exists.return_value = True
@@ -28,7 +28,7 @@ def test_run_terraform(
     mock_task.id = "mocked-task-id"
     mock_delay.return_value = mock_task
     
-    response = test_client.post("/api/v1/terraform/warehouse", json={"org_slug": "test-org"}, headers=api_key_headers)
+    response = test_client.post("/api/infra/postgres/db", json={"org_slug": "test-org"}, headers=api_key_headers)
     assert response.status_code == 200
     
     content = response.json()
@@ -52,7 +52,7 @@ def test_run_terraform_path_not_found(
     # Mock the path exists check to return False
     mock_exists.return_value = False
     
-    response = test_client.post("/api/v1/terraform/warehouse", json={"org_slug": "test-org"}, headers=api_key_headers)
+    response = test_client.post("/api/infra/postgres/db", json={"org_slug": "test-org"}, headers=api_key_headers)
     assert response.status_code == 500  # Now expecting 500 since we're handling it as an internal error
     assert "not found" in response.json()["detail"].lower()
 
@@ -61,12 +61,12 @@ def test_run_terraform_unauthorized(test_client: TestClient) -> None:
     """
     Test terraform endpoint without API key.
     """
-    response = test_client.post("/api/v1/terraform/warehouse", json={"org_slug": "test-org"})
+    response = test_client.post("/api/infra/postgres/db", json={"org_slug": "test-org"})
     assert response.status_code == 401
     assert "Invalid API Key" in response.json()["detail"]
 
 
-@patch("app.api.v1.endpoints.terraform_operations.AsyncResult")
+@patch("app.api.routes.AsyncResult")
 def test_get_terraform_status(
     mock_async_result,
     test_client: TestClient,
@@ -92,7 +92,7 @@ def test_get_terraform_status(
     
     mock_async_result.return_value = mock_result
     
-    response = test_client.get(f"/api/v1/terraform/status/{task_id}", headers=api_key_headers)
+    response = test_client.get(f"/api/task/{task_id}", headers=api_key_headers)
     assert response.status_code == 200
     
     content = response.json()
@@ -103,7 +103,7 @@ def test_get_terraform_status(
     assert "credentials" in content
 
 
-@patch("app.api.v1.endpoints.terraform_operations.AsyncResult")
+@patch("app.api.routes.AsyncResult")
 def test_get_terraform_status_not_found(
     mock_async_result,
     test_client: TestClient,
@@ -119,6 +119,6 @@ def test_get_terraform_status_not_found(
     mock_result.id = None  # This will trigger the 404 condition
     mock_async_result.return_value = mock_result
     
-    response = test_client.get(f"/api/v1/terraform/status/{task_id}", headers=api_key_headers)
+    response = test_client.get(f"/api/task/{task_id}", headers=api_key_headers)
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower() 

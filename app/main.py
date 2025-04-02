@@ -1,14 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.api import api_router
+from app.api.routes import infra_router, task_router, health_router
 from app.core.config import settings
 
 app = FastAPI(
-    title=settings.PROJECT_NAME,
-    description="Warehouse API",
+    title="Infrastructure Service API",
+    description="Lightweight API for infrastructure provisioning",
     version="1.0.0",
-    openapi_url=f"{settings.API_V1_STR}/openapi.json",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -23,9 +22,11 @@ if settings.BACKEND_CORS_ORIGINS:
         allow_headers=["*"],
     )
 
-app.include_router(api_router, prefix=settings.API_V1_STR)
-
+# Include the simplified router structure
+app.include_router(infra_router, prefix="/api/infra")
+app.include_router(task_router, prefix="/api/task")
+app.include_router(health_router, prefix="/api")
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to the Warehouse API. See /docs for documentation."} 
+    return {"message": "Welcome to the Infrastructure Service API. See /docs for documentation."} 

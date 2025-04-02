@@ -1,36 +1,45 @@
 import os
-from typing import Any, Dict, Optional
 import re
+import logging
 import secrets
 import string
-from celery.result import AsyncResult
+import time
+from typing import Any, Dict, Optional
 from datetime import datetime, timezone
-import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-import time
+from celery.result import AsyncResult
 
 from app.core.auth import get_api_key
 from app.core.config import settings
-from app.schemas.terraform import TerraformResponse, TerraformStatus, TerraformJobStatusResponse, OrgSlugRequest
+from app.schemas.terraform import TerraformResponse, TerraformStatus, TerraformJobStatusResponse
 from app.tasks.terraform import run_terraform_commands
 
-router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Path to Terraform scripts from settings
-TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE = settings.TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE
-TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET = settings.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET
+# Create routers
+api_router = APIRouter()
+infra_router = APIRouter(dependencies=[Depends(get_api_key)])
+task_router = APIRouter(dependencies=[Depends(get_api_key)])
+health_router = APIRouter()
 
+# Request models
+class PostgresDBRequest(BaseModel):
+    """Request model for PostgreSQL database creation"""
+    org_slug: str
+
+class SupersetRequest(BaseModel):
+    """Request model for Superset creation"""
+    org_slug: str
+
+# Utility functions
 def generate_secure_password(length=16):
     """Generate a secure random alphanumeric password"""
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 def update_tfvars_with_org_slug(file_path, replacements):
-    """
-    Update terraform.tfvars file with org_slug
-    """
+    """Update terraform.tfvars file with org_slug"""
     try:
         # Read the file
         with open(file_path, 'r') as file:
@@ -49,8 +58,20 @@ def update_tfvars_with_org_slug(file_path, replacements):
             
         return True
     except Exception as e:
-        print(f"Error updating tfvars: {str(e)}")
+        logger.error(f"Error updating tfvars: {str(e)}")
         return False
+
+def get_status_message(status: TerraformStatus, error: str = None) -> str:
+    """Generate a human-readable status message"""
+    if status == TerraformStatus.PENDING:
+        return "Terraform job is pending execution"
+    elif status == TerraformStatus.RUNNING:
+        return "Terraform job is currently running"
+    elif status == TerraformStatus.SUCCESS:
+        return "Terraform job completed successfully"
+    elif status == TerraformStatus.ERROR:
+        return f"Terraform job failed: {error}" if error else "Terraform job failed"
+    return "Unknown job status"
 
 def celery_status_to_terraform_status(celery_status):
     """Convert Celery task status to TerraformStatus"""
@@ -66,29 +87,22 @@ def celery_status_to_terraform_status(celery_status):
     else:  # failure, revoked, retry, etc.
         return TerraformStatus.ERROR
 
-def get_status_message(status: TerraformStatus, error: Optional[str] = None) -> str:
-    """Generate a human-readable status message"""
-    if status == TerraformStatus.PENDING:
-        return "Terraform job is pending execution"
-    elif status == TerraformStatus.RUNNING:
-        return "Terraform job is currently running"
-    elif status == TerraformStatus.SUCCESS:
-        return "Terraform job completed successfully"
-    elif status == TerraformStatus.ERROR:
-        return f"Terraform job failed: {error}" if error else "Terraform job failed"
-    return "Unknown job status"
+# Health check endpoint
+@health_router.get("/health")
+async def health_check():
+    """Health check endpoint to verify that the API is functioning"""
+    return {"status": "ok", "message": "API is healthy"}
 
-@router.post("/warehouse", response_model=TerraformResponse)
-async def create_warehouse(request: OrgSlugRequest):
-    """
-    Create a new warehouse database with the provided organization slug
-    """
+# PostgreSQL database creation endpoint
+@infra_router.post("/postgres/db", response_model=TerraformResponse)
+async def create_postgres_db(request: PostgresDBRequest):
+    """Create a new PostgreSQL database with the provided organization slug"""
     try:
         # Get the terraform.tfvars file path
         terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE
         tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
         
-        logger.info(f"Creating warehouse for org_slug: {request.org_slug}")
+        logger.info(f"Creating PostgreSQL database for org_slug: {request.org_slug}")
         logger.info(f"Terraform path: {terraform_path}")
         logger.info(f"Terraform vars path: {tfvars_path}")
         
@@ -127,7 +141,7 @@ async def create_warehouse(request: OrgSlugRequest):
         
         logger.info(f"Passing credentials to task: {credentials}")
         
-        # Start the Celery task with the new run_terraform_commands function
+        # Start the Celery task with the run_terraform_commands function
         task = run_terraform_commands.delay(terraform_path, credentials)
         
         logger.info(f"Task started with ID: {task.id}")
@@ -141,23 +155,27 @@ async def create_warehouse(request: OrgSlugRequest):
         )
 
     except Exception as e:
-        logger.exception(f"Error in create_warehouse: {e}")
+        logger.exception(f"Error in create_postgres_db: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
 
-@router.post("/superset", response_model=TerraformResponse)
-async def create_superset(request: OrgSlugRequest):
-    """
-    Create a new Superset instance with the provided organization slug
-    """
+# Superset creation endpoint
+@infra_router.post("/superset", response_model=TerraformResponse)
+async def create_superset(request: SupersetRequest):
+    """Create a new Superset instance with the provided organization slug"""
     try:
         # Get the terraform.tfvars file path
         terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET
         tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
         
+        logger.info(f"Creating Superset instance for org_slug: {request.org_slug}")
+        logger.info(f"Terraform path: {terraform_path}")
+        logger.info(f"Terraform vars path: {tfvars_path}")
+        
         if not os.path.exists(tfvars_path):
+            logger.error(f"Terraform vars file not found: {tfvars_path}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Terraform vars file not found: {tfvars_path}"
@@ -180,7 +198,10 @@ async def create_superset(request: OrgSlugRequest):
             "neworg_name": f"{request.org_slug}.dalgo.org"
         }
         
+        logger.info(f"Updating tfvars with: {replacements}")
+        
         if not update_tfvars_with_org_slug(tfvars_path, replacements):
+            logger.error("Failed to update terraform variables")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to update terraform variables"
@@ -198,11 +219,15 @@ async def create_superset(request: OrgSlugRequest):
             "neworg_name": f"{request.org_slug}.dalgo.org"
         }
         
-        # Start the Celery task with the new run_terraform_commands function
+        logger.info(f"Passing credentials to task: {credentials}")
+        
+        # Start the Celery task with the run_terraform_commands function
         task = run_terraform_commands.apply_async(
             args=[terraform_path, credentials],
             queue='terraform'
         )
+        
+        logger.info(f"Task started with ID: {task.id}")
         
         # Create a response using the task ID as job_id
         return TerraformResponse(
@@ -213,22 +238,21 @@ async def create_superset(request: OrgSlugRequest):
         )
 
     except Exception as e:
+        logger.exception(f"Error in create_superset: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
 
-@router.get("/status/{task_id}", response_model=TerraformJobStatusResponse)
-async def get_task_info(
-    task_id: str,
-    api_key: str = Depends(get_api_key)
-) -> Any:
+# Task status endpoint
+@task_router.get("/{task_id}", response_model=TerraformJobStatusResponse)
+async def get_task_status(task_id: str) -> Any:
     """
-    Get the status of a Terraform job.
+    Get the status of a task by its ID.
     
     This endpoint can be polled to check the progress of a long-running job.
-    When the job is complete, it will include the Terraform outputs.
-    For successful jobs, it will also include the credentials that were used
+    When the job is complete, it will include the task outputs.
+    For successful jobs, it will also include credentials that were used
     to configure the resource (database passwords, admin accounts, etc.).
     """
     logger.info(f"Getting status for task: {task_id}")

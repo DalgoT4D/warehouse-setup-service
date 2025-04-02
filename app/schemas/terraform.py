@@ -1,8 +1,6 @@
 from enum import Enum
 from typing import Optional, Dict, Any
 from datetime import datetime
-from uuid import UUID
-
 from pydantic import BaseModel, Field
 
 
@@ -12,11 +10,6 @@ class TerraformStatus(str, Enum):
     RUNNING = "running"
     SUCCESS = "success"
     ERROR = "error"
-
-
-class OrgSlugRequest(BaseModel):
-    """Request model with organization slug"""
-    org_slug: str
 
 
 class TerraformResponse(BaseModel):
