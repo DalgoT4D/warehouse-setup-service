@@ -2,16 +2,85 @@ import os
 import subprocess
 import json
 import shutil
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 from celery import Task
 from celery.utils.log import get_task_logger
 from app.core.celery_app import celery_app
 from app.core.config import settings
 import time
 import re
+import sys
 from datetime import datetime, timezone
 
 logger = get_task_logger(__name__)
+
+def run_with_live_output(cmd: list, log_prefix: str = "") -> Tuple[int, str, str]:
+    """
+    Run a command and stream its output to the logger in real-time.
+    
+    Args:
+        cmd: The command to run as a list of strings
+        log_prefix: Optional prefix for log messages
+        
+    Returns:
+        Tuple of (return_code, stdout, stderr)
+    """
+    logger.info(f"{log_prefix} Running command: {' '.join(cmd)}")
+    
+    # Start the process without capturing output to allow real-time display
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1  # Line buffered
+    )
+    
+    # Collect stdout and stderr for returning later
+    stdout_lines = []
+    stderr_lines = []
+    
+    # Helper function to read and log output in real-time
+    def process_stream(stream, is_error=False, prefix=""):
+        collected_lines = stderr_lines if is_error else stdout_lines
+        for line in iter(stream.readline, ''):
+            if not line:
+                break
+            line = line.rstrip()
+            collected_lines.append(line)
+            if is_error:
+                logger.error(f"{prefix} {line}")
+            else:
+                logger.info(f"{prefix} {line}")
+    
+    # Process stdout and stderr concurrently
+    import threading
+    stdout_thread = threading.Thread(
+        target=process_stream, 
+        args=(process.stdout, False, f"{log_prefix} [STDOUT]")
+    )
+    stderr_thread = threading.Thread(
+        target=process_stream, 
+        args=(process.stderr, True, f"{log_prefix} [STDERR]")
+    )
+    
+    stdout_thread.start()
+    stderr_thread.start()
+    
+    # Wait for the process to complete
+    return_code = process.wait()
+    
+    # Wait for output processing to complete
+    stdout_thread.join()
+    stderr_thread.join()
+    
+    # Combine the collected output
+    stdout = "\n".join(stdout_lines)
+    stderr = "\n".join(stderr_lines)
+    
+    logger.info(f"{log_prefix} Command completed with return code: {return_code}")
+    
+    return return_code, stdout, stderr
 
 class TerraformTask(Task):
     """Base task for Terraform operations"""
@@ -94,7 +163,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "error": error_msg,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "credentials": credentials
+                "credentials": None
             }
         
         if not os.path.exists(main_tf_path):
@@ -105,7 +174,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "error": error_msg,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "credentials": credentials
+                "credentials": None
             }
             
         # Load module settings to get SSH key path
@@ -143,7 +212,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "error": error_msg,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "credentials": credentials
+                "credentials": None
             }
         
         # Change to terraform directory
@@ -152,21 +221,19 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
         # 1. Clean up any existing locks
         logger.info("Checking for and cleaning up any existing state locks...")
         try:
-            state_list_process = subprocess.run(
+            returncode, stdout, stderr = run_with_live_output(
                 ["terraform", "state", "list"],
-                capture_output=True,
-                text=True,
-                check=False
+                "STATE LIST"
             )
-            if "lock" in state_list_process.stderr.lower():
-                lock_id_match = re.search(r'Lock Info:\s+ID:\s+([a-f0-9\-]+)', state_list_process.stderr)
+            
+            if "lock" in stderr.lower():
+                lock_id_match = re.search(r'Lock Info:\s+ID:\s+([a-f0-9\-]+)', stderr)
                 if lock_id_match:
                     lock_id = lock_id_match.group(1)
                     logger.info(f"Found lock with ID: {lock_id}, attempting to force-unlock")
-                    subprocess.run(
+                    run_with_live_output(
                         ["terraform", "force-unlock", "-force", lock_id],
-                        capture_output=True,
-                        check=False
+                        "FORCE UNLOCK"
                     )
                     logger.info("Force-unlock completed")
         except Exception as e:
@@ -174,69 +241,61 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
         
         # 2. Run terraform init
         logger.info(f"Initializing Terraform in {terraform_path}")
-        init_process = subprocess.run(
+        returncode, init_stdout, init_stderr = run_with_live_output(
             ["terraform", "init"],
-            capture_output=True,
-            text=True,
-            check=False
+            "INIT"
         )
         
         # Check if we have a lock issue with init
-        if init_process.returncode != 0 and "lock" in init_process.stderr.lower():
+        if returncode != 0 and "lock" in init_stderr.lower():
             logger.warning("Terraform init failed due to lock issue, retrying with -lock=false")
-            init_process = subprocess.run(
+            returncode, init_stdout, init_stderr = run_with_live_output(
                 ["terraform", "init", "-lock=false"],
-                capture_output=True,
-                text=True,
-                check=False
+                "INIT RETRY"
             )
         
         # If init failed, return error
-        if init_process.returncode != 0:
-            error_msg = f"Terraform init failed: {init_process.stderr}"
+        if returncode != 0:
+            error_msg = f"Terraform init failed: {init_stderr}"
             logger.error(error_msg)
             return {
                 "status": "error",
                 "phase": "init",
                 "error": error_msg,
-                "stderr": init_process.stderr,
-                "init_output": init_process.stdout,
+                "stderr": init_stderr,
+                "init_output": init_stdout,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "credentials": credentials
+                "credentials": None  # Do not include credentials on error
             }
         
         # 3. Run terraform plan with task-specific var file
         logger.info(f"Running terraform plan with task-specific var file: {task_tfvars_path}")
-        plan_process = subprocess.run(
+        returncode, plan_stdout, plan_stderr = run_with_live_output(
             ["terraform", "plan", f"-var-file={task_tfvars_path}"],
-            capture_output=True,
-            text=True,
-            check=False
+            "PLAN"
         )
         
         # Check if we have a lock issue with plan
-        if plan_process.returncode != 0 and "lock" in plan_process.stderr.lower():
+        if returncode != 0 and "lock" in plan_stderr.lower():
             logger.warning("Terraform plan failed due to lock issue, retrying with -lock=false")
-            plan_process = subprocess.run(
+            returncode, plan_stdout, plan_stderr = run_with_live_output(
                 ["terraform", "plan", f"-var-file={task_tfvars_path}", "-lock=false"],
-                capture_output=True,
-                text=True,
-                check=False
+                "PLAN RETRY"
             )
         
         # If plan failed, return error
-        if plan_process.returncode != 0:
-            error_msg = f"Terraform plan failed: {plan_process.stderr}"
+        if returncode != 0:
+            error_msg = f"Terraform plan failed: {plan_stderr}"
             logger.error(error_msg)
             logger.info("Stopping execution due to failed terraform plan")
             return {
                 "status": "error",
                 "phase": "plan",
                 "error": error_msg,
-                "stderr": plan_process.stderr,
-                "init_output": init_process.stdout,
-                "plan_output": plan_process.stdout,
+                "stderr": plan_stderr,
+                "init_output": init_stdout,
+                "plan_output": plan_stdout,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "credentials": None  # Do not include credentials on error
@@ -244,48 +303,42 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
         
         # 4. Run terraform apply with task-specific var file
         logger.info(f"Running terraform apply with task-specific var file: {task_tfvars_path}")
-        apply_process = subprocess.run(
+        returncode, apply_stdout, apply_stderr = run_with_live_output(
             ["terraform", "apply", "-auto-approve", f"-var-file={task_tfvars_path}"],
-            capture_output=True,
-            text=True,
-            check=False
+            "APPLY"
         )
         
         # Check if we have a lock issue with apply
-        if apply_process.returncode != 0 and "lock" in apply_process.stderr.lower():
+        if returncode != 0 and "lock" in apply_stderr.lower():
             logger.warning("Terraform apply failed due to lock issue, retrying with -lock=false")
-            apply_process = subprocess.run(
+            returncode, apply_stdout, apply_stderr = run_with_live_output(
                 ["terraform", "apply", "-auto-approve", f"-var-file={task_tfvars_path}", "-lock=false"],
-                capture_output=True,
-                text=True,
-                check=False
+                "APPLY RETRY"
             )
         
         # If apply failed, try to run terraform destroy and return error
-        if apply_process.returncode != 0:
-            error_msg = f"Terraform apply failed: {apply_process.stderr}"
+        if returncode != 0:
+            error_msg = f"Terraform apply failed: {apply_stderr}"
             logger.error(error_msg)
             
             # Attempt to destroy resources to avoid dangling infrastructure
             logger.info("Apply failed, attempting to run terraform destroy for cleanup")
-            destroy_process = subprocess.run(
+            destroy_returncode, destroy_stdout, destroy_stderr = run_with_live_output(
                 ["terraform", "destroy", "-auto-approve", f"-var-file={task_tfvars_path}"],
-                capture_output=True,
-                text=True,
-                check=False
+                "DESTROY"
             )
             
             destroy_output = "Destroy not attempted"
             destroy_status = "not_attempted"
             
-            if destroy_process.returncode == 0:
-                destroy_output = destroy_process.stdout
+            if destroy_returncode == 0:
+                destroy_output = destroy_stdout
                 destroy_status = "success"
                 logger.info("Successfully cleaned up resources with terraform destroy after failed apply")
             else:
-                destroy_output = f"Destroy failed: {destroy_process.stderr}"
+                destroy_output = f"Destroy failed: {destroy_stderr}"
                 destroy_status = "failed"
-                logger.error(f"Failed to clean up resources: {destroy_process.stderr}")
+                logger.error(f"Failed to clean up resources: {destroy_stderr}")
             
             # Return error status and explicitly set credentials to None
             logger.info("Returning error status due to failed terraform apply, credentials will not be included")
@@ -293,10 +346,10 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "status": "error",
                 "phase": "apply",
                 "error": error_msg,
-                "stderr": apply_process.stderr,
-                "init_output": init_process.stdout,
-                "plan_output": plan_process.stdout,
-                "apply_output": apply_process.stdout,
+                "stderr": apply_stderr,
+                "init_output": init_stdout,
+                "plan_output": plan_stdout,
+                "apply_output": apply_stdout,
                 "destroy_output": destroy_output,
                 "destroy_status": destroy_status,
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -306,13 +359,11 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
         
         # 5. Get outputs if apply succeeded
         try:
-            output_process = subprocess.run(
+            returncode, output_stdout, output_stderr = run_with_live_output(
                 ["terraform", "output", "-json"],
-                capture_output=True,
-                text=True,
-                check=False
+                "OUTPUT"
             )
-            outputs = json.loads(output_process.stdout) if output_process.stdout.strip() else {}
+            outputs = json.loads(output_stdout) if output_stdout.strip() else {}
             logger.info(f"Terraform outputs: {outputs}")
         except Exception as e:
             logger.warning(f"Failed to get structured outputs: {e}")
@@ -322,9 +373,9 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
         logger.info(f"Terraform job completed successfully, credentials: {credentials}")
         result = {
             "status": "success",
-            "init_output": init_process.stdout,
-            "plan_output": plan_process.stdout,
-            "apply_output": apply_process.stdout,
+            "init_output": init_stdout,
+            "plan_output": plan_stdout,
+            "apply_output": apply_stdout,
             "outputs": outputs,
             "credentials": credentials,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -341,7 +392,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
             "error": error_msg,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "completed_at": datetime.now(timezone.utc).isoformat(),
-            "credentials": credentials
+            "credentials": None
         }
     finally:
         # Clean up task-specific tfvars file if needed
