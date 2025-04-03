@@ -229,6 +229,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
         if plan_process.returncode != 0:
             error_msg = f"Terraform plan failed: {plan_process.stderr}"
             logger.error(error_msg)
+            logger.info("Stopping execution due to failed terraform plan")
             return {
                 "status": "error",
                 "phase": "plan",
@@ -238,7 +239,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "plan_output": plan_process.stdout,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "credentials": credentials
+                "credentials": None  # Do not include credentials on error
             }
         
         # 4. Run terraform apply with task-specific var file
@@ -280,40 +281,28 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
             if destroy_process.returncode == 0:
                 destroy_output = destroy_process.stdout
                 destroy_status = "success"
+                logger.info("Successfully cleaned up resources with terraform destroy after failed apply")
             else:
                 destroy_output = f"Destroy failed: {destroy_process.stderr}"
                 destroy_status = "failed"
+                logger.error(f"Failed to clean up resources: {destroy_process.stderr}")
             
-            # For demonstration, we'll simulate success with credentials even though there was an error
-            # In a production environment, you would handle this differently
-            if credentials:
-                logger.info("Returning credentials for users despite error, but setting status to error")
-                return {
-                    "status": "error",
-                    "init_output": init_process.stdout,
-                    "plan_output": plan_process.stdout,
-                    "apply_output": "Error: " + error_msg,
-                    "outputs": {},
-                    "error": error_msg,
-                    "credentials": credentials,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "completed_at": datetime.now(timezone.utc).isoformat()
-                }
-            else:
-                return {
-                    "status": "error",
-                    "phase": "apply",
-                    "error": error_msg,
-                    "stderr": apply_process.stderr,
-                    "init_output": init_process.stdout,
-                    "plan_output": plan_process.stdout,
-                    "apply_output": apply_process.stdout,
-                    "destroy_output": destroy_output,
-                    "destroy_status": destroy_status,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                    "credentials": credentials
-                }
+            # Return error status and explicitly set credentials to None
+            logger.info("Returning error status due to failed terraform apply, credentials will not be included")
+            return {
+                "status": "error",
+                "phase": "apply",
+                "error": error_msg,
+                "stderr": apply_process.stderr,
+                "init_output": init_process.stdout,
+                "plan_output": plan_process.stdout,
+                "apply_output": apply_process.stdout,
+                "destroy_output": destroy_output,
+                "destroy_status": destroy_status,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "credentials": None  # Explicitly do not include credentials on error
+            }
         
         # 5. Get outputs if apply succeeded
         try:

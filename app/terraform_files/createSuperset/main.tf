@@ -165,10 +165,25 @@ provider "aws" {
   token      = var.aws_session_token
 }
 
-# Read data from neworgs.json for port, rule_priority and Host header
+# Get reference for port 443 rule existing on load balancer
+data "aws_lb_listener" "selected443" {
+  load_balancer_arn = data.aws_lb.curalb.arn
+  port              = 443
+}
 
+# Calculate a unique priority
 locals {
-  neworg_config = jsondecode(file("neworg.json"))
+  # Use the rule_priority from tfvars or default to 200
+  new_priority = var.rule_priority != "" ? tonumber(var.rule_priority) : 200
+  
+  # Create a map similar to what was in neworg.json but using variables
+  rule_config = {
+    (var.neworg_port) = {
+      port = var.neworg_port
+      priority = local.new_priority
+      header = var.neworg_name
+    }
+  }
 }
 
 # Get Reference for RDS database
@@ -181,20 +196,13 @@ data "aws_lb" "curalb" {
   name = var.alb_name
 }
 
-# Get reference for port 443 rule existing on load balancer
-
-data "aws_lb_listener" "selected443" {
-  load_balancer_arn = data.aws_lb.curalb.arn
-  port              = 443
-}
-
 # Append rule for forward on existing port 443 rule with host header received as input
 
 resource "aws_lb_listener_rule" "neworg_listener_rule" {
 
   listener_arn = data.aws_lb_listener.selected443.arn
 
-  for_each = { for rule in local.neworg_config : rule.port => rule }
+  for_each = local.rule_config
   priority = each.value.priority
   action {
     type             = "forward"
@@ -213,7 +221,7 @@ resource "aws_lb_listener_rule" "neworg_listener_rule" {
 # for superset its HTTP
 
 resource "aws_lb_target_group" "neworg_tgt_group" {
-  for_each = { for rule in local.neworg_config : rule.port => rule }
+  for_each = local.rule_config
   name     = "${var.CLIENT_NAME}-tg-${each.value.port}"
   port     = each.value.port
   protocol = "HTTP"
@@ -237,7 +245,7 @@ resource "aws_lb_target_group" "neworg_tgt_group" {
 # Register newly created target group with new port onto ec2 instance received as input
 
 resource "aws_lb_target_group_attachment" "neworg_register_ec2" {
-  for_each         = { for rule in local.neworg_config : rule.port => rule }
+  for_each         = local.rule_config
   target_group_arn = aws_lb_target_group.neworg_tgt_group[each.key].arn
   target_id        = var.appli_ec2
   port             = each.value.port
@@ -262,8 +270,16 @@ data "aws_security_group" "allow_all_from_alb" {
   id = var.alb_sg
 }
 
-# Attach the ALB's security group to the primary network interface of the EC2 instance. 
+# Check if the security group is already attached to the network interface
+locals {
+  existing_security_groups = toset(data.aws_instance.ec2_instance_id.vpc_security_group_ids)
+  needs_sg_attachment = !contains(local.existing_security_groups, data.aws_security_group.allow_all_from_alb.id)
+}
+
+# Attach the ALB's security group to the primary network interface of the EC2 instance only if not already attached
 resource "aws_network_interface_sg_attachment" "sg_attachment" {
+  count = local.needs_sg_attachment ? 1 : 0
+  
   security_group_id    = data.aws_security_group.allow_all_from_alb.id
   network_interface_id = data.aws_instance.ec2_instance_id.network_interface_id  # Primary network interface
 }

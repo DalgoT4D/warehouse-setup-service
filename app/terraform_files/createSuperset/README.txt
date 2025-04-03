@@ -1,4 +1,4 @@
-﻿Procedure to use terraform scripts for “superset” deployment.
+﻿Procedure to use terraform scripts for "superset" deployment.
 
 
 Script  Overview : 
@@ -11,14 +11,14 @@ First part
  
 
 
-1. Pulling the latest “docker-superset” repo from github viz.
+1. Pulling the latest "docker-superset" repo from github viz.
 
 
 https://github.com/DalgoT4D/docker-superset.git
 
 
 2. Generate_make_client                                    ⇐  take input from terraform.tfvars 
-3. Updates “superset.env”                                 ⇐  take input from terraform.tfvars
+3. Updates "superset.env"                                 ⇐  take input from terraform.tfvars
 4. Ship entire repo to remote machine with docker-compose.yml and superset.env.
 5. Execute build.sh                                             <= build container onto remote machine.
 6. docker compose                                             <= launch application
@@ -46,7 +46,7 @@ Location of script directory, terraform will be execute from here
 AUTOROOT_DIR        = "/home/XXXX/YYYY"
 
 
-Remote user login on application server ( usually it's “ubuntu” )
+Remote user login on application server ( usually it's "ubuntu" )
 REMOTE_USER         = "ubuntu"
 
 
@@ -58,7 +58,7 @@ Local directory where repo is copied,will be deleted at every execution
 LOCAL_CLONE_DIR     = "/home/XXX/YYY/superset-repo"
 
 
-Superserset, don’t want to hardcode, incase of future changes
+Superserset, don't want to hardcode, incase of future changes
 SUPERSET_MIDDLE_DIR = "gensuperset/make-client"
 
 
@@ -118,39 +118,23 @@ ENABLE_OAUTH            = ""                      ⇐ Empty as of now
 alb_name      = "rails-alb-1  "             ⇐ Load Balancer name
 cur_vpc       = "vpc-XXXXXXXXXXXXXXXXX"     ⇐ Current VPC Name
 appli_ec2     = "i-YYYYYYYYYYYYYYYYY"       ⇐ ec2 instance on aws
+neworg_port   = 9990                        ⇐ Container port for the new organization
+neworg_name   = "mydemongo2.dalgo.in"       ⇐ Domain name for the new organization
+rule_priority = 100                         ⇐ Priority for the load balancer rule (1-50000)
 # End
-new port, rule priority and host header write into neworg.json file as shown below.
 
+The rule_priority parameter defines the priority for the load balancer rule (values between 1-50000).
+If not specified, it defaults to 200. Each rule must have a unique priority number, with higher 
+numbers having lower precedence. It is recommended to use values with gaps (e.g., 100, 200, 300) 
+to allow for inserting rules in between if needed later.
 
-
-
-[
-    { "port": 9990, "priority": 110, "header": "mydemongo2.dalgo.in" }
-]
-
-
-So if you want to add another org, just add another json entry.
-
-
-[
-    { "port": 9990, "priority": 110, "header": "mydemongo2.dalgo.in" },
-    { "port": 8883, "priority": 120, "header": "mydemongo4.dalgo.in" }
-]
-
-
-Similarly if you want to delete an entry, remove a specific json entry.
-[
-    { "port": 9990, "priority": 110, "header": "mydemongo2.dalgo.in" },
-]
-
-
-Make sure the above port entry should match the CONTAINER_PORT entry , else your superset application and aws configuration will mismatch.
-
+Make sure the above port entry (neworg_port) should match the CONTAINER_PORT entry,
+else your superset application and aws configuration will mismatch.
 
 Prerequisite / Execution Environment
 ================================
 Unlike bash and python3 , which are usually installed on the system by default.
-Terraform you have to manually install with aws credentials, both are must, because terraform uses aws api’s as part of resource creation on aws infrastructure in your account. 
+Terraform you have to manually install with aws credentials, both are must, because terraform uses aws api's as part of resource creation on aws infrastructure in your account. 
 
 
 provider "aws" {
@@ -167,16 +151,16 @@ provider "aws" {
 This is available in platform_infra/Tf4aws directory.
 2. Copy terraform.tf.example into terraform.tfvars.
 3. Copy your public key on ec2 machine for passwordless ssh execution.
-4. Make sure “git”  is available on the local machine.
-5. Make sure “psql” command executable from the given remote application server to aws RDS instance.
+4. Make sure "git"  is available on the local machine.
+5. Make sure "psql" command executable from the given remote application server to aws RDS instance.
 6. Make sure terraform and aws configured on the local machine.
-7. Make sure proper aws credentials, if not configure with “aws configure”.
-8. Verify it's configured properly with command “aws sts get-caller-identity”.
-9. Before executing the terraform command, make sure to export all three environment variables in the shell. ( viz. $AWS_ACCESS_KEY_ID",”$AWS_SECRET_ACCESS_KEY”,”$AWS_SESSION_TOKEN”  )
+7. Make sure proper aws credentials, if not configure with "aws configure".
+8. Verify it's configured properly with command "aws sts get-caller-identity".
+9. Before executing the terraform command, make sure to export all three environment variables in the shell. ( viz. $AWS_ACCESS_KEY_ID",","$AWS_SECRET_ACCESS_KEY","$AWS_SESSION_TOKEN"  )
 10. There are three options we generally use with terraform, ( plan, apply, delete ).
-11. terraform plan , shows action on resources  in aws infrastructure account which you have configured as part of “aws configure”.
-12. terraform apply, will create resources as mentioned in “main.tf”.
-13. terraform destroy, will delete resources mentioned in “main.tf”.
+11. terraform plan , shows action on resources  in aws infrastructure account which you have configured as part of "aws configure".
+12. terraform apply, will create resources as mentioned in "main.tf".
+13. terraform destroy, will delete resources mentioned in "main.tf".
 
 
 To launch the superset application and configure aws automatically, use below command.

@@ -286,6 +286,7 @@ async def create_superset(payload: SupersetRequest):
             "CLIENT_NAME": payload.org_slug,
             "OUTPUT_DIR": f"../../../{payload.org_slug}",
             "SUPERSET_SECRET_KEY": secret_key,
+            "SUPERSET_ADMIN_USERNAME": module_settings.SUPERSET_ADMIN_USERNAME,
             "SUPERSET_ADMIN_PASSWORD": admin_password,
             "APP_DB_USER": f"superset_{payload.org_slug}",
             "APP_DB_PASS": db_password,
@@ -382,14 +383,16 @@ async def get_task_status(task_id: str) -> Any:
                 logger.info(f"Extracted credentials: {credentials}")
                 logger.info(f"Extracted outputs: {outputs}")
                 
-                # If status is successful, ensure we include credentials
-                if task_result.status == SUCCESS:
-                    logger.info(f"Job successful, including credentials in response")
-                
                 # If there's an error message, capture it
                 if result.get('status') == 'error':
                     error = result.get('error')
                     logger.error(f"Error found in result: {error}")
+                    # Ensure credentials are not included with errors
+                    credentials = None
+                    
+                # If status is successful, ensure we include credentials
+                elif task_result.status == SUCCESS:
+                    logger.info(f"Job successful, including credentials in response")
         except Exception as e:
             logger.exception(f"Error extracting task result: {e}")
             error = str(e)
@@ -411,9 +414,10 @@ async def get_task_status(task_id: str) -> Any:
         created_at=datetime.now(timezone.utc),  # Not available from AsyncResult directly
         completed_at=datetime.now(timezone.utc) if task_result.status in CELERY_TERMINAL_STATES else None,
         outputs=outputs,
-        credentials=credentials
+        # Only include credentials for SUCCESS status
+        credentials=credentials if terraform_status == TerraformStatus.SUCCESS else None
     )
     
-    logger.info(f"Returning response with status: {response.status}, credentials present: {response.credentials is not None}")
+    logger.info(f"Returning response with status: {response.status}, error: {error is not None}, credentials present: {response.credentials is not None}")
     
     return response 

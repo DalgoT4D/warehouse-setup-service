@@ -29,6 +29,9 @@ class TerraformModuleSettings(BaseModel):
     REMOTE_USER: str = ""
     SSH_KEY_PATH: str = ""
     
+    # Superset Configuration
+    SUPERSET_ADMIN_USERNAME: str = "admin"
+    
     def get_rds_hostname(self) -> str:
         """Get the full RDS hostname"""
         return f"{self.RDS_INSTANCE_NAME}.{self.RDS_DOMAIN}"
@@ -132,7 +135,8 @@ class Settings(BaseSettings):
                 'PORT': 'DB_PORT',
                 'ec2_instance_id': 'EC2_INSTANCE_ID',
                 'REMOTE_USER': 'REMOTE_USER',
-                'SSH_KEY': 'SSH_KEY_PATH'
+                'SSH_KEY': 'SSH_KEY_PATH',
+                'SUPERSET_ADMIN_USERNAME': 'SUPERSET_ADMIN_USERNAME'
             }
             
             # Update settings with values from tfvars

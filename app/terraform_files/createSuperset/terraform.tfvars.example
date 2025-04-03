@@ -45,7 +45,8 @@ cur_vpc       = "vpc-XXXXXXXXXX"
 neworg_port   = 9990
 appli_ec2     = "i-XXXXXX"
 neworg_name   = "mydemongo.dalgo.in"
-rule_priority = 100
+# Priority for the load balancer rule (1-50000). If not specified, defaults to 200
+rule_priority = 200
 
 # End
 
