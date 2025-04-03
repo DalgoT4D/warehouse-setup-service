@@ -2,11 +2,14 @@ from typing import Any, Dict, List, Optional, Union
 import os
 import re
 import shutil
+import logging
 from pathlib import Path
 
 from pydantic import AnyHttpUrl, field_validator, BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Set up logger
+logger = logging.getLogger(__name__)
 
 class TerraformModuleSettings(BaseModel):
     """Module-specific settings loaded from a module's terraform.tfvars file"""
@@ -64,7 +67,7 @@ class Settings(BaseSettings):
     # Terraform Settings - Paths
     TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE: str = "app/terraform_files/createWarehouse"
     TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET: str = "app/terraform_files/createSuperset"
-    TERRAFORM_TASK_CONFIGS_PATH: str = "app/terraform_files/task_configs"
+    TERRAFORM_TASK_CONFIGS_PATH: str = "app/terraform_files/temp_task_configs"
     
     # Celery and Redis settings
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
@@ -172,7 +175,7 @@ class Settings(BaseSettings):
         else:
             module_type = "superset"
         
-        # Generate task-specific filename
+        # Generate task-specific filename based on module type
         task_tfvars_filename = f"{module_type}.{task_id}.tfvars"
         task_tfvars_path = os.path.join(abs_task_configs_path, task_tfvars_filename)
         
@@ -226,6 +229,10 @@ class Settings(BaseSettings):
         Returns:
             Path to the task-specific tfvars file
         """
+        # Ensure module_type is either 'warehouse' or 'superset'
+        if module_type not in ["warehouse", "superset"]:
+            raise ValueError(f"Invalid module_type: {module_type}. Must be 'warehouse' or 'superset'.")
+            
         task_tfvars_filename = f"{module_type}.{task_id}.tfvars"
         return os.path.join(self.TERRAFORM_TASK_CONFIGS_PATH, task_tfvars_filename)
     
@@ -238,6 +245,8 @@ class Settings(BaseSettings):
                     If None, delete all task-specific tfvars files.
         """
         if not os.path.exists(self.TERRAFORM_TASK_CONFIGS_PATH):
+            # Create directory if it doesn't exist
+            os.makedirs(self.TERRAFORM_TASK_CONFIGS_PATH, exist_ok=True)
             return
             
         if task_id:
@@ -245,13 +254,23 @@ class Settings(BaseSettings):
             for module_type in ['warehouse', 'superset']:
                 task_tfvars_path = self.get_task_tfvars_path(module_type, task_id)
                 if os.path.exists(task_tfvars_path):
-                    os.remove(task_tfvars_path)
+                    try:
+                        os.remove(task_tfvars_path)
+                        logger.info(f"Cleaned up temporary tfvars file: {task_tfvars_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to delete task tfvars file {task_tfvars_path}: {e}")
         else:
-            # Delete all task files (be careful with this!)
+            # Delete all task files
+            count = 0
             for filename in os.listdir(self.TERRAFORM_TASK_CONFIGS_PATH):
                 if filename.endswith('.tfvars'):
-                    file_path = os.path.join(self.TERRAFORM_TASK_CONFIGS_PATH, filename)
-                    os.remove(file_path)
+                    try:
+                        file_path = os.path.join(self.TERRAFORM_TASK_CONFIGS_PATH, filename)
+                        os.remove(file_path)
+                        count += 1
+                    except Exception as e:
+                        logger.error(f"Failed to delete task tfvars file {file_path}: {e}")
+            logger.info(f"Cleaned up {count} temporary tfvars files from {self.TERRAFORM_TASK_CONFIGS_PATH}")
 
 
 settings = Settings() 
