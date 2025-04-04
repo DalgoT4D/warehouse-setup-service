@@ -1,5 +1,10 @@
 from celery import Celery
+import logging
 from app.core.config import settings
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Create Celery instance
 celery_app = Celery(
@@ -26,4 +31,6 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     task_reject_on_worker_lost=True,
-) 
+)
+
+logger.info("Celery app configured with enhanced logging for Terraform tasks") 

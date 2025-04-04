@@ -128,8 +128,45 @@ If not specified, it defaults to 200. Each rule must have a unique priority numb
 numbers having lower precedence. It is recommended to use values with gaps (e.g., 100, 200, 300) 
 to allow for inserting rules in between if needed later.
 
-Make sure the above port entry (neworg_port) should match the CONTAINER_PORT entry,
-else your superset application and aws configuration will mismatch.
+PORT SYNCHRONIZATION
+===================
+The script has been enhanced to automatically synchronize the port between the Docker container and the AWS target group.
+If the generate-make-client.sh script finds that the initially requested port (from CONTAINER_PORT) is already
+in use, it will automatically find an available port and update the docker-compose.yml file.
+
+The Terraform script now handles this potential port change in two phases:
+1. First, it creates the AWS target group with the port specified in the tfvars file (neworg_port)
+2. After the container is running, it extracts the actual port from docker-compose.yml by:
+   - Parsing the docker-compose.yml file for port mappings
+   - If not found, checking running Docker containers
+   - If still not found, falling back to the CONTAINER_PORT value
+3. If the actual port differs from the configured port, it registers a new target with the actual port
+   in the existing target group, so traffic is correctly routed
+
+This approach ensures that the AWS load balancer always forwards traffic to the correct port that the
+container is actually using, even when port conflicts occur, while also avoiding Terraform plan/apply
+errors related to unknown values in for_each.
+
+MULTIPLE CLIENT DEPLOYMENTS
+===========================
+The script is designed to support multiple client deployments by using unique identifiers. Each deployment:
+
+1. Uses a unique identifier combining CLIENT_NAME and port to ensure resource names don't conflict
+2. Stores port information in client-specific files
+3. Uses stable triggers based on client configuration rather than timestamps to prevent unnecessary recreations
+
+To create multiple clients, you need to:
+1. Create separate terraform.tfvars files for each client (e.g., client1.tfvars, client2.tfvars)
+2. Run terraform with the specific vars file:
+   terraform apply -var-file=client1.tfvars
+   terraform apply -var-file=client2.tfvars
+
+Note that Terraform's default behavior is to manage all resources in the state file. If you need to 
+destroy a specific client's resources, you'll need to use the appropriate var file:
+terraform destroy -var-file=client1.tfvars
+
+Make sure the neworg_port entry matches the CONTAINER_PORT entry as an initial value, but the script 
+will handle any port changes automatically if needed.
 
 Prerequisite / Execution Environment
 ================================

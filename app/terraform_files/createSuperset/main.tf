@@ -151,10 +151,9 @@ resource "null_resource" "remote_build" {
 
 # alb_name      = "XXXXXX"               (      ALBName         )
 # cur_vpc       = "vpc-XXXXXXXXXXXXXXX"  (      vpc id          )
-# neworg_port   = XXXX                   (      9990            )
+# CONTAINER_PORT= XXXX                   (      9990            )
 # appli_ec2     = "i-XXXXXXXXXXXXXXXXX"  (  ec2 instance id     )
 # neworg_name   = "XXXXXXXXXXXXXXXXXX"   (  mydemongo.dalgo.in  )
-# rule_priority = XXXX                   (      90              )
 
 # Assume region is ap-south-1 else please change as applicable
 
@@ -165,24 +164,14 @@ provider "aws" {
   token      = var.aws_session_token
 }
 
-# Get reference for port 443 rule existing on load balancer
-data "aws_lb_listener" "selected443" {
-  load_balancer_arn = data.aws_lb.curalb.arn
-  port              = 443
-}
-
-# Calculate a unique priority
+# Use terraform.tfvars variables 
 locals {
-  # Use the rule_priority from tfvars or default to 200
-  new_priority = var.rule_priority != "" ? tonumber(var.rule_priority) : 200
-  
-  # Create a map similar to what was in neworg.json but using variables
+  # Define the configuration directly using the terraform.tfvars variables
+  # port: CONTAINER_PORT, header: neworg_name, priority: CONTAINER_PORT
   rule_config = {
-    (var.neworg_port) = {
-      port = var.neworg_port
-      priority = local.new_priority
-      header = var.neworg_name
-    }
+    port = var.CONTAINER_PORT
+    priority = var.CONTAINER_PORT
+    header = var.neworg_name
   }
 }
 
@@ -196,21 +185,27 @@ data "aws_lb" "curalb" {
   name = var.alb_name
 }
 
+# Get reference for port 443 rule existing on load balancer
+
+data "aws_lb_listener" "selected443" {
+  load_balancer_arn = data.aws_lb.curalb.arn
+  port              = 443
+}
+
 # Append rule for forward on existing port 443 rule with host header received as input
 
 resource "aws_lb_listener_rule" "neworg_listener_rule" {
-
   listener_arn = data.aws_lb_listener.selected443.arn
-
-  for_each = local.rule_config
-  priority = each.value.priority
+  priority = local.rule_config.priority
+  
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.neworg_tgt_group[each.key].arn
+    target_group_arn = aws_lb_target_group.neworg_tgt_group.arn
   }
+  
   condition {
     host_header {
-      values = [each.value.header]
+      values = [local.rule_config.header]
     }
   }
 }
@@ -221,9 +216,8 @@ resource "aws_lb_listener_rule" "neworg_listener_rule" {
 # for superset its HTTP
 
 resource "aws_lb_target_group" "neworg_tgt_group" {
-  for_each = local.rule_config
-  name     = "${var.CLIENT_NAME}-tg-${each.value.port}"
-  port     = each.value.port
+  name     = "${var.CLIENT_NAME}-tg-${local.rule_config.port}"
+  port     = local.rule_config.port
   protocol = "HTTP"
   vpc_id   = var.cur_vpc
 
@@ -236,8 +230,10 @@ resource "aws_lb_target_group" "neworg_tgt_group" {
     healthy_threshold   = 3
     unhealthy_threshold = 3
   }
+  
   tags = {
-    Name = "Superset-tgt-grp-${each.value.port}"
+    Name = "${var.CLIENT_NAME}-superset-tg-${local.rule_config.port}"
+    ClientName = var.CLIENT_NAME
   }
 }
 
@@ -245,21 +241,18 @@ resource "aws_lb_target_group" "neworg_tgt_group" {
 # Register newly created target group with new port onto ec2 instance received as input
 
 resource "aws_lb_target_group_attachment" "neworg_register_ec2" {
-  for_each         = local.rule_config
-  target_group_arn = aws_lb_target_group.neworg_tgt_group[each.key].arn
+  target_group_arn = aws_lb_target_group.neworg_tgt_group.arn
   target_id        = var.appli_ec2
-  port             = each.value.port
+  port             = local.rule_config.port
 }
 
 
 # Get ec2 instance id from ec2 name received as input variable
-
 data "aws_instance" "ec2_instance_id" {
   instance_id = var.appli_ec2
 }
 
 # Get existing security id on ec2 instance received as input
-
 data "aws_security_group" "ec2_sg" {
   # Assume we are adding into appli_ec2 instance and has at least one security group
   id = tolist(data.aws_instance.ec2_instance_id.vpc_security_group_ids)[0]
@@ -270,18 +263,16 @@ data "aws_security_group" "allow_all_from_alb" {
   id = var.alb_sg
 }
 
-# Check if the security group is already attached to the network interface
+# Check if the security group is already attached to the instance
 locals {
-  existing_security_groups = toset(data.aws_instance.ec2_instance_id.vpc_security_group_ids)
-  needs_sg_attachment = !contains(local.existing_security_groups, data.aws_security_group.allow_all_from_alb.id)
+  is_sg_attached = contains(data.aws_instance.ec2_instance_id.vpc_security_group_ids, var.alb_sg)
 }
 
 # Attach the ALB's security group to the primary network interface of the EC2 instance only if not already attached
 resource "aws_network_interface_sg_attachment" "sg_attachment" {
-  count = local.needs_sg_attachment ? 1 : 0
-  
+  count = local.is_sg_attached ? 0 : 1
   security_group_id    = data.aws_security_group.allow_all_from_alb.id
-  network_interface_id = data.aws_instance.ec2_instance_id.network_interface_id  # Primary network interface
+  network_interface_id = data.aws_instance.ec2_instance_id.network_interface_id
 }
 
 # Output the status

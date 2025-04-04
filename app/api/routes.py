@@ -4,6 +4,7 @@ import logging
 import secrets
 import string
 import time
+import random
 from typing import Any, Dict, Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -35,7 +36,9 @@ class PostgresDBRequest(BaseModel):
 
 class SupersetRequest(BaseModel):
     """Request model for Superset creation"""
-    org_slug: str
+    client_name: str
+    ec2_machine_id: str
+    port: int
 
 # Utility functions
 def generate_secure_password(length=16):
@@ -43,7 +46,7 @@ def generate_secure_password(length=16):
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
-def update_tfvars_with_org_slug(file_path, replacements):
+def update_tfvars(file_path, replacements):
     """Update terraform.tfvars file with dynamic values"""
     try:
         # Read the file
@@ -255,13 +258,15 @@ async def create_postgres_db(payload: PostgresDBRequest):
 # Superset creation endpoint
 @infra_router.post("/superset", response_model=TerraformResponse)
 async def create_superset(payload: SupersetRequest):
-    """Create a new Superset instance with the provided organization slug"""
+    """Create a new Superset instance with the provided client name"""
     try:
         # Get the terraform.tfvars file path
         terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET
         tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
         
-        logger.info(f"Creating Superset for organization: {payload.org_slug}")
+        logger.info(f"Creating Superset for client: {payload.client_name}")
+        logger.info(f"Using EC2 instance: {payload.ec2_machine_id}")
+        logger.info(f"Using port: {payload.port}")
         logger.info(f"Terraform path: {terraform_path}")
         logger.info(f"Terraform vars path: {tfvars_path}")
         
@@ -283,22 +288,25 @@ async def create_superset(payload: SupersetRequest):
         
         # Prepare replacements for tfvars file (will be used to create task-specific file)
         replacements = {
-            "CLIENT_NAME": payload.org_slug,
-            "OUTPUT_DIR": f"../../../{payload.org_slug}",
+            "CLIENT_NAME": payload.client_name,
+            "OUTPUT_DIR": f"../../../{payload.client_name}",
             "SUPERSET_SECRET_KEY": secret_key,
             "SUPERSET_ADMIN_USERNAME": module_settings.SUPERSET_ADMIN_USERNAME,
             "SUPERSET_ADMIN_PASSWORD": admin_password,
-            "APP_DB_USER": f"superset_{payload.org_slug}",
+            "APP_DB_USER": f"superset_{payload.client_name}",
             "APP_DB_PASS": db_password,
-            "APP_DB_NAME": f"superset_{payload.org_slug}",
-            "neworg_name": f"{payload.org_slug}.dalgo.org"
+            "APP_DB_NAME": f"superset_{payload.client_name}",
+            "neworg_name": f"{payload.client_name}.dalgo.org",
+            "CONTAINER_PORT": str(payload.port),
+            "rule_priority": str(payload.port),
+            "appli_ec2": payload.ec2_machine_id
         }
         
         logger.info(f"Prepared replacements for task-specific tfvars: {replacements}")
         
         # Store credentials with the task
         credentials = {
-            "superset_url": f"https://{payload.org_slug}.dalgo.org",
+            "superset_url": f"https://{payload.client_name}.dalgo.org",
             "admin_username": module_settings.SUPERSET_ADMIN_USERNAME,
             "admin_password": admin_password
         }
@@ -377,25 +385,34 @@ async def get_task_status(task_id: str) -> Any:
             
             if isinstance(result, dict):
                 logger.info(f"Result keys: {result.keys()}")
-                # Extract outputs and credentials
-                outputs = result.get('outputs')
-                credentials = result.get('credentials')
-                logger.info(f"Extracted credentials: {credentials}")
-                logger.info(f"Extracted outputs: {outputs}")
                 
-                # If there's an error message, capture it
-                if result.get('status') == 'error':
+                # Check if the result contains an error field
+                if result.get('error'):
                     error = result.get('error')
                     logger.error(f"Error found in result: {error}")
+                    # Override terraform_status to ERROR if there's an error, regardless of celery status
+                    terraform_status = TerraformStatus.ERROR
                     # Ensure credentials are not included with errors
                     credentials = None
-                    
-                # If status is successful, ensure we include credentials
-                elif task_result.status == SUCCESS:
+                # Check if result has explicit status field
+                elif result.get('status') == 'error':
+                    error = result.get('error')
+                    logger.error(f"Error status found in result: {error}")
+                    # Override terraform_status to ERROR
+                    terraform_status = TerraformStatus.ERROR
+                    # Ensure credentials are not included with errors
+                    credentials = None
+                # If status is successful and there's no error, extract outputs and credentials
+                elif terraform_status == TerraformStatus.SUCCESS:
+                    outputs = result.get('outputs')
+                    credentials = result.get('credentials')
+                    logger.info(f"Extracted credentials: {credentials}")
+                    logger.info(f"Extracted outputs: {outputs}")
                     logger.info(f"Job successful, including credentials in response")
         except Exception as e:
             logger.exception(f"Error extracting task result: {e}")
             error = str(e)
+            terraform_status = TerraformStatus.ERROR
     
     # Set the error message if task failed but we don't have a specific error yet
     if task_result.status == FAILURE and not error:

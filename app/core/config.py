@@ -67,7 +67,8 @@ class Settings(BaseSettings):
     # Terraform Settings - Paths
     TERRAFORM_SCRIPT_PATH_CREATE_WAREHOUSE: str = "app/terraform_files/createWarehouse"
     TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET: str = "app/terraform_files/createSuperset"
-    TERRAFORM_TASK_CONFIGS_PATH: str = "app/terraform_files/temp_task_configs"
+    # Use environment variable with default fallback
+    TERRAFORM_TASK_CONFIGS_PATH: str = os.environ.get("TERRAFORM_TASK_CONFIGS_PATH", "app/terraform_files/temp_task_configs")
     
     # Celery and Redis settings
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
@@ -152,28 +153,55 @@ class Settings(BaseSettings):
     
     def create_task_specific_tfvars(self, module_path: str, task_id: str, replacements: Dict[str, Any] = None) -> str:
         """
-        Create a task-specific terraform.tfvars file based on the original with optional replacements.
+        Create a task-specific tfvars file with replacements
         
         Args:
-            module_path: Path to the terraform module directory
-            task_id: Unique task ID to use in the filename
-            replacements: Optional dictionary of key-value pairs to replace in the tfvars
+            module_path: Path to the terraform module
+            task_id: Unique task ID
+            replacements: Dictionary of key-value pairs to replace in the tfvars file
             
         Returns:
-            Path to the task-specific tfvars file
+            Path to the created task-specific tfvars file
         """
-        # Ensure the task configs directory exists
-        os.makedirs(self.TERRAFORM_TASK_CONFIGS_PATH, exist_ok=True)
-        
-        # Convert paths to absolute paths
+        # Ensure module_path is absolute
         abs_module_path = os.path.abspath(module_path) if not os.path.isabs(module_path) else module_path
-        abs_task_configs_path = os.path.abspath(self.TERRAFORM_TASK_CONFIGS_PATH) if not os.path.isabs(self.TERRAFORM_TASK_CONFIGS_PATH) else self.TERRAFORM_TASK_CONFIGS_PATH
+        logger.info(f"Absolute module path: {abs_module_path}")
         
-        # Determine module type (warehouse or superset)
-        if "createWarehouse" in abs_module_path or "warehouse" in abs_module_path.lower():
+        # Ensure task_configs_path is absolute and in the correct location
+        # Always use the terraform_files directory as the parent
+        terraform_files_dir = os.path.dirname(os.path.dirname(abs_module_path))
+        logger.info(f"Initial terraform_files_dir: {terraform_files_dir}")
+        
+        if not terraform_files_dir.endswith("terraform_files"):
+            # If we're not already in the terraform_files directory, find it
+            parts = abs_module_path.split(os.sep)
+            for i, part in enumerate(parts):
+                if part == "terraform_files":
+                    terraform_files_dir = os.sep.join(parts[:i+1])
+                    break
+            logger.info(f"Updated terraform_files_dir: {terraform_files_dir}")
+        
+        abs_task_configs_path = os.path.join(terraform_files_dir, "temp_task_configs")
+        logger.info(f"Task configs path: {abs_task_configs_path}")
+        
+        # Create the directory if it doesn't exist
+        os.makedirs(abs_task_configs_path, exist_ok=True)
+        
+        # Determine module type based on path
+        module_type = "warehouse"
+        if "createSuperset" in abs_module_path or "superset" in abs_module_path.lower():
+            module_type = "superset"
+        elif "createWarehouse" in abs_module_path or "warehouse" in abs_module_path.lower():
             module_type = "warehouse"
         else:
-            module_type = "superset"
+            # If we can't determine from the path, check the directory name
+            dir_name = os.path.basename(abs_module_path)
+            if "superset" in dir_name.lower():
+                module_type = "superset"
+            elif "warehouse" in dir_name.lower():
+                module_type = "warehouse"
+            else:
+                logger.warning(f"Could not determine module type, defaulting to 'superset'")
         
         # Generate task-specific filename based on module type
         task_tfvars_filename = f"{module_type}.{task_id}.tfvars"
@@ -216,6 +244,7 @@ class Settings(BaseSettings):
         with open(task_tfvars_path, 'w') as f:
             f.write(content)
         
+        logger.info(f"Created task-specific tfvars file: {task_tfvars_path} for module type: {module_type}")
         return task_tfvars_path
     
     def get_task_tfvars_path(self, module_type: str, task_id: str) -> str:
@@ -233,8 +262,12 @@ class Settings(BaseSettings):
         if module_type not in ["warehouse", "superset"]:
             raise ValueError(f"Invalid module_type: {module_type}. Must be 'warehouse' or 'superset'.")
             
+        # Get the absolute path to the terraform_files directory
+        terraform_files_dir = os.path.dirname(os.path.dirname(os.path.abspath(self.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET)))
+        task_configs_path = os.path.join(terraform_files_dir, "temp_task_configs")
+        
         task_tfvars_filename = f"{module_type}.{task_id}.tfvars"
-        return os.path.join(self.TERRAFORM_TASK_CONFIGS_PATH, task_tfvars_filename)
+        return os.path.join(task_configs_path, task_tfvars_filename)
     
     def cleanup_task_tfvars(self, task_id: str = None) -> None:
         """
@@ -244,15 +277,19 @@ class Settings(BaseSettings):
             task_id: If provided, only delete files for this task ID.
                     If None, delete all task-specific tfvars files.
         """
-        if not os.path.exists(self.TERRAFORM_TASK_CONFIGS_PATH):
+        # Get the absolute path to the terraform_files directory
+        terraform_files_dir = os.path.dirname(os.path.dirname(os.path.abspath(self.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET)))
+        task_configs_path = os.path.join(terraform_files_dir, "temp_task_configs")
+        
+        if not os.path.exists(task_configs_path):
             # Create directory if it doesn't exist
-            os.makedirs(self.TERRAFORM_TASK_CONFIGS_PATH, exist_ok=True)
+            os.makedirs(task_configs_path, exist_ok=True)
             return
             
         if task_id:
             # Delete specific task files
             for module_type in ['warehouse', 'superset']:
-                task_tfvars_path = self.get_task_tfvars_path(module_type, task_id)
+                task_tfvars_path = os.path.join(task_configs_path, f"{module_type}.{task_id}.tfvars")
                 if os.path.exists(task_tfvars_path):
                     try:
                         os.remove(task_tfvars_path)
@@ -262,15 +299,15 @@ class Settings(BaseSettings):
         else:
             # Delete all task files
             count = 0
-            for filename in os.listdir(self.TERRAFORM_TASK_CONFIGS_PATH):
+            for filename in os.listdir(task_configs_path):
                 if filename.endswith('.tfvars'):
                     try:
-                        file_path = os.path.join(self.TERRAFORM_TASK_CONFIGS_PATH, filename)
+                        file_path = os.path.join(task_configs_path, filename)
                         os.remove(file_path)
                         count += 1
                     except Exception as e:
                         logger.error(f"Failed to delete task tfvars file {file_path}: {e}")
-            logger.info(f"Cleaned up {count} temporary tfvars files from {self.TERRAFORM_TASK_CONFIGS_PATH}")
+            logger.info(f"Cleaned up {count} temporary tfvars files from {task_configs_path}")
 
 
 settings = Settings() 

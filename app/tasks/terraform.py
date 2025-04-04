@@ -11,7 +11,9 @@ import time
 import re
 import sys
 from datetime import datetime, timezone
+import urllib.parse
 
+# Use the celery task logger which is already properly configured
 logger = get_task_logger(__name__)
 
 def run_with_live_output(cmd: list, log_prefix: str = "") -> Tuple[int, str, str]:
@@ -48,10 +50,15 @@ def run_with_live_output(cmd: list, log_prefix: str = "") -> Tuple[int, str, str
                 break
             line = line.rstrip()
             collected_lines.append(line)
+            # Ensure every line is logged with proper level for visibility
             if is_error:
                 logger.error(f"{prefix} {line}")
+                # Also print to stderr for direct console visibility
+                print(f"{prefix} {line}", file=sys.stderr, flush=True)
             else:
                 logger.info(f"{prefix} {line}")
+                # Also print to stdout for direct console visibility
+                print(f"{prefix} {line}", file=sys.stdout, flush=True)
     
     # Process stdout and stderr concurrently
     import threading
@@ -67,20 +74,20 @@ def run_with_live_output(cmd: list, log_prefix: str = "") -> Tuple[int, str, str
     stdout_thread.start()
     stderr_thread.start()
     
-    # Wait for the process to complete
-    return_code = process.wait()
-    
-    # Wait for output processing to complete
+    # Wait for both streams to be processed
     stdout_thread.join()
     stderr_thread.join()
     
-    # Combine the collected output
-    stdout = "\n".join(stdout_lines)
-    stderr = "\n".join(stderr_lines)
+    # Wait for the process to finish and get its return code
+    return_code = process.wait()
+    
+    # Join collected lines into strings
+    stdout_str = "\n".join(stdout_lines)
+    stderr_str = "\n".join(stderr_lines)
     
     logger.info(f"{log_prefix} Command completed with return code: {return_code}")
     
-    return return_code, stdout, stderr
+    return return_code, stdout_str, stderr_str
 
 class TerraformTask(Task):
     """Base task for Terraform operations"""
@@ -122,6 +129,15 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
     logger.info(f"Received credentials: {credentials}")
     logger.info(f"Received replacements: {replacements}")
     
+    # Ensure the temp_task_configs directory exists
+    abs_task_configs_path = os.path.abspath(settings.TERRAFORM_TASK_CONFIGS_PATH) if not os.path.isabs(settings.TERRAFORM_TASK_CONFIGS_PATH) else settings.TERRAFORM_TASK_CONFIGS_PATH
+    
+    if not os.path.exists(abs_task_configs_path):
+        logger.info(f"Creating temp_task_configs directory at: {abs_task_configs_path}")
+        os.makedirs(abs_task_configs_path, exist_ok=True)
+    else:
+        logger.info(f"temp_task_configs directory already exists at: {abs_task_configs_path}")
+    
     # Update task state to STARTED (running)
     self.update_state(state='STARTED', meta={'status': 'running'})
     
@@ -135,11 +151,34 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
             terraform_path = settings.TERRAFORM_SCRIPT_PATH_CREATE_SUPERSET
         logger.info(f"Using fallback path from settings: {terraform_path}")
     
+    # Make sure terraform_path is absolute
+    terraform_path = os.path.abspath(terraform_path) if not os.path.isabs(terraform_path) else terraform_path
+    
     # Determine module type for task-specific file naming
-    if "createWarehouse" in terraform_path or "warehouse" in terraform_path.lower():
-        module_type = "warehouse"
-    else:
+    # Extract just the directory name for more reliable detection
+    module_dir_name = os.path.basename(terraform_path)
+    
+    # Determine module type based solely on the directory name, not the full path
+    # to avoid issues with the word "warehouse" appearing in higher level directories
+    if "createSuperset" in module_dir_name or "superset" in module_dir_name.lower():
         module_type = "superset"
+        logger.info(f"Detected superset module type from directory name: {module_dir_name}")
+    elif "createWarehouse" in module_dir_name or "warehouse" in module_dir_name.lower():
+        module_type = "warehouse"
+        logger.info(f"Detected warehouse module type from directory name: {module_dir_name}")
+    else:
+        # If we can't determine from the directory name, check the full path
+        # but prioritize superset detection to avoid false matches with warehouse
+        if "createSuperset" in terraform_path or "superset" in terraform_path.lower():
+            module_type = "superset"
+            logger.info(f"Detected superset module type from full path: {terraform_path}")
+        elif "createWarehouse" in terraform_path or "warehouse" in terraform_path.lower():
+            module_type = "warehouse"
+            logger.info(f"Detected warehouse module type from full path: {terraform_path}")
+        else:
+            # Default to superset if no clear indicator
+            module_type = "superset"
+            logger.warning(f"Could not determine module type, defaulting to 'superset'")
     
     main_tf_path = os.path.join(terraform_path, "main.tf")
     original_tfvars_path = os.path.join(terraform_path, "terraform.tfvars")
@@ -365,6 +404,30 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
             )
             outputs = json.loads(output_stdout) if output_stdout.strip() else {}
             logger.info(f"Terraform outputs: {outputs}")
+            
+            # Check if the actual port was different from the requested port
+            if 'actual_port' in outputs and outputs['actual_port'].get('value'):
+                actual_port = outputs['actual_port'].get('value')
+                port_changed = outputs.get('port_changed', {}).get('value', False)
+                
+                # Update credentials with the actual port and additional information
+                if credentials and 'superset_url' in credentials:
+                    # Add the port information to credentials
+                    credentials['port'] = actual_port
+                    
+                    # Add information about whether the port was changed from the requested port
+                    if port_changed:
+                        credentials['port_changed'] = True
+                        logger.info(f"Port was changed from the requested port to {actual_port}")
+                    else:
+                        credentials['port_changed'] = False
+                        
+                    # Add the actual priority if available
+                    if 'actual_priority' in outputs and outputs['actual_priority'].get('value'):
+                        credentials['priority'] = outputs['actual_priority'].get('value')
+                        
+                    logger.info(f"Updated credentials with port information: port={actual_port}, changed={port_changed}")
+            
         except Exception as e:
             logger.warning(f"Failed to get structured outputs: {e}")
             outputs = {}

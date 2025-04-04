@@ -30,12 +30,8 @@ variable "alb_name" {
   description = "this is our Current Application load Balancer"
   type        = string
 }
-variable "neworg_port" {
-  description = "this is new port for which we need to create the target group and security group and add it to ALB and ec2 instance"
-  type        = string
-}
 variable "appli_ec2" {
-  description = "this is ec2 instance where application is UP and RUNNING on New port"
+  description = "this is ec2 instance where application is UP and RUNNING on Container Port"
   type        = string
 }
 variable "neworg_name" {
