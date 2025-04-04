@@ -19,19 +19,15 @@ class TerraformResponse(BaseModel):
 
 class TerraformJobStatusResponse(BaseModel):
     """Response model for job status query"""
-    task_id: str
+    id: str
     status: TerraformStatus
-    message: str
+    result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
-    created_at: datetime
-    completed_at: Optional[datetime] = None
-    outputs: Optional[Dict[str, Any]] = None
-    credentials: Optional[Dict[str, str]] = None
 
 
 class TerraformResult(BaseModel):
     """Detailed result of a terraform operation"""
-    task_id: str
+    id: str
     status: TerraformStatus
     init_output: Optional[str] = None
     apply_output: Optional[str] = None

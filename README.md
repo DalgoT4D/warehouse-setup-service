@@ -103,11 +103,7 @@ This endpoint will run a Terraform script located at `/create-warehouse` path to
 **Response:**
 ```json
 {
-  "task_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "pending",
-  "message": "Terraform job is pending execution",
-  "created_at": "2023-04-25T14:30:45.123456",
-  "task_id": "8a7d463c-7418-4294-9de6-e49326374112"
+  "task_id": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
@@ -130,16 +126,32 @@ When a job is complete, the response includes any outputs from the Terraform scr
 **Sample success response:**
 ```json
 {
-  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "success",
-  "message": "Terraform job completed successfully",
-  "created_at": "2023-04-25T14:30:45.123456",
-  "completed_at": "2023-04-25T14:32:15.654321",
-  "task_id": "8a7d463c-7418-4294-9de6-e49326374112",
-  "outputs": {
-    "database_url": "postgres://user:pass@hostname:5432/db",
-    "database_name": "warehouse_db"
-  }
+  "result": {
+    "credentials": {
+      "host": "some-db.amazonaws.com",
+      "port": "5432",
+      "user": "database_user",
+      "password": "secure_password123",
+      "dbname": "customer_db"
+    },
+    "outputs": {
+      "some_terraform_output": "value"
+    }
+  },
+  "error": null
+}
+```
+
+Or in case of an error:
+
+```json
+{
+  "id": "8a7d463c-7418-4294-9de6-e49326374112",
+  "status": "error",
+  "result": null,
+  "error": "Failed to create database: invalid parameters"
 }
 ```
 

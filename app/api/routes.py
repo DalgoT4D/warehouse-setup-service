@@ -243,7 +243,7 @@ async def create_postgres_db(payload: PostgresDBRequest):
         
         logger.info(f"Task started with ID: {task.id}")
         
-        # Create a response using the task ID as task_id
+        # Create a response using the task ID as id
         return TerraformResponse(
             task_id=task.id,
         )
@@ -322,7 +322,7 @@ async def create_superset(payload: SupersetRequest):
         
         logger.info(f"Task started with ID: {task.id}")
         
-        # Create a response using the task ID as task_id
+        # Create a response using the task ID as id
         return TerraformResponse(
             task_id=task.id,
         )
@@ -361,11 +361,9 @@ async def get_task_status(task_id: str) -> Any:
     terraform_status = celery_status_to_terraform_status(task_result.status)
     logger.info(f"Task status: {task_result.status}, converted to: {terraform_status}")
     
-    # Get task result if available
-    result = None
+    # Initialize result and error
+    result_data = {}
     error = None
-    outputs = None
-    credentials = None
     
     # Determine error message based on Celery state
     if task_result.status == REVOKED:
@@ -392,23 +390,20 @@ async def get_task_status(task_id: str) -> Any:
                     logger.error(f"Error found in result: {error}")
                     # Override terraform_status to ERROR if there's an error, regardless of celery status
                     terraform_status = TerraformStatus.ERROR
-                    # Ensure credentials are not included with errors
-                    credentials = None
                 # Check if result has explicit status field
                 elif result.get('status') == 'error':
                     error = result.get('error')
                     logger.error(f"Error status found in result: {error}")
                     # Override terraform_status to ERROR
                     terraform_status = TerraformStatus.ERROR
-                    # Ensure credentials are not included with errors
-                    credentials = None
-                # If status is successful and there's no error, extract outputs and credentials
+                # If status is successful and there's no error, extract outputs and credentials for the result
                 elif terraform_status == TerraformStatus.SUCCESS:
-                    outputs = result.get('outputs')
-                    credentials = result.get('credentials')
-                    logger.info(f"Extracted credentials: {credentials}")
-                    logger.info(f"Extracted outputs: {outputs}")
-                    logger.info(f"Job successful, including credentials in response")
+                    # Include outputs and credentials in the result
+                    if result.get('outputs'):
+                        result_data['outputs'] = result.get('outputs')
+                    if result.get('credentials'):
+                        result_data['credentials'] = result.get('credentials')
+                    logger.info(f"Job successful, including data in result field")
         except Exception as e:
             logger.exception(f"Error extracting task result: {e}")
             error = str(e)
@@ -422,19 +417,14 @@ async def get_task_status(task_id: str) -> Any:
             error = f"Task failed with inaccessible result: {str(e)}"
         logger.error(f"Task failed: {error}")
     
-    # Create status response
+    # Create status response using id in the response but taking task_id as the source
     response = TerraformJobStatusResponse(
-        task_id=task_id,
+        id=task_id,
         status=terraform_status,
-        message=get_status_message(terraform_status, error),
-        error=error,
-        created_at=datetime.now(timezone.utc),  # Not available from AsyncResult directly
-        completed_at=datetime.now(timezone.utc) if task_result.status in CELERY_TERMINAL_STATES else None,
-        outputs=outputs,
-        # Only include credentials for SUCCESS status
-        credentials=credentials if terraform_status == TerraformStatus.SUCCESS else None
+        result=result_data if result_data else None,
+        error=error
     )
     
-    logger.info(f"Returning response with status: {response.status}, error: {error is not None}, credentials present: {response.credentials is not None}")
+    logger.info(f"Returning response with status: {response.status}, error: {error is not None}, result present: {response.result is not None}")
     
     return response 

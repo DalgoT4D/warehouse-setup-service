@@ -11,7 +11,7 @@ from app.schemas.terraform import TerraformStatus
 
 
 @patch("os.path.exists")
-@patch("app.tasks.terraform.run_terraform_commands.delay")
+@patch("app.tasks.terraform.run_terraform_commands.apply_async")
 def test_run_terraform(
     mock_delay,
     mock_exists,
@@ -102,15 +102,16 @@ def test_get_terraform_status(
     assert response.status_code == 200
     
     content = response.json()
-    assert content["task_id"] == task_id
+    assert content["id"] == task_id
     assert content["status"] == "success"  # Check the string value instead of enum
-    assert content["outputs"]["database_url"] == "postgres://user:pass@hostname:5432/db"
-    assert "credentials" in content
-    assert "dbname" in content["credentials"]
-    assert "host" in content["credentials"]
-    assert "port" in content["credentials"]
-    assert "user" in content["credentials"]
-    assert "password" in content["credentials"]
+    assert content["result"]["outputs"]["database_url"] == "postgres://user:pass@hostname:5432/db"
+    assert "credentials" in content["result"]
+    assert content["result"]["credentials"]["dbname"] == "test-db"
+    assert content["result"]["credentials"]["host"] == "superset.cwqixp4vwhou.us-east-1.rds.amazonaws.com"
+    assert content["result"]["credentials"]["port"] == "5432"
+    assert content["result"]["credentials"]["user"] == "test-db_user"
+    assert content["result"]["credentials"]["password"] == "test_password"
+    assert content["error"] is None
 
 
 @patch("app.api.routes.AsyncResult")
@@ -132,3 +133,39 @@ def test_get_terraform_status_not_found(
     response = test_client.get(f"/api/task/{task_id}", headers=api_key_headers)
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower() 
+
+
+@patch("app.api.routes.AsyncResult")
+def test_get_terraform_status_failed(
+    mock_async_result,
+    test_client: TestClient,
+    api_key_headers: Dict[str, str]
+) -> None:
+    """
+    Test getting terraform job status for a failed task.
+    """
+    task_id = "failed-task-id"
+    
+    # Create a mock AsyncResult with FAILURE status
+    mock_result = MagicMock()
+    mock_result.id = task_id
+    mock_result.status = FAILURE  # Use Celery constant for FAILURE
+    mock_result.successful.return_value = False
+    mock_result.failed.return_value = True
+    mock_result.ready.return_value = True
+    mock_result.result = {
+        "status": "error",
+        "error": "Failed to create Superset instance",
+        "phase": "apply"
+    }
+    
+    mock_async_result.return_value = mock_result
+    
+    response = test_client.get(f"/api/task/{task_id}", headers=api_key_headers)
+    assert response.status_code == 200
+    
+    content = response.json()
+    assert content["id"] == task_id
+    assert content["status"] == "error"  # Check the string value instead of enum
+    assert content["result"] is None
+    assert content["error"] == "Failed to create Superset instance" 
