@@ -119,27 +119,96 @@ resource "null_resource" "update_superset_env" {
 
 # Three commands we usually execute for docker-superset, (viz . docker build, docker compose, create admin user)
 resource "null_resource" "remote_build" {
-  depends_on = [null_resource.update_superset_env]
+  depends_on = [
+    null_resource.update_superset_env
+  ]
 
   connection {
     type        = "ssh"
-    user        = "ubuntu"
+    user        = var.REMOTE_USER
     private_key = file("${var.SSH_KEY}")
     host        = data.aws_instance.ec2_instance_id.public_ip
   }
 
+  # Add a unique trigger to ensure this always runs for new deployments
+  triggers = {
+    client_config = "${var.CLIENT_NAME}-${var.CONTAINER_PORT}-${var.neworg_name}-${timestamp()}"
+  }
+
   provisioner "remote-exec" {
     inline = [
-      "echo 'Creating container with new client...'",
+      "echo '==============================================='",
+      "echo 'Creating container with new client: ${var.CLIENT_NAME}'",
+      "echo 'Working directory: ${var.CLONED_PARENT_DIR}/${var.SUPERSET_MAKE_CLIENT_DIR}/${var.OUTPUT_DIR}'",
+      "echo '==============================================='",
+      
+      # Ensure the client directory exists before proceeding
+      "if [ ! -d \"${var.CLONED_PARENT_DIR}/${var.SUPERSET_MAKE_CLIENT_DIR}/${var.OUTPUT_DIR}\" ]; then",
+      "  echo 'Error: Client directory does not exist. Something went wrong with generate-make-client.sh'",
+      "  mkdir -p \"${var.CLONED_PARENT_DIR}/${var.SUPERSET_MAKE_CLIENT_DIR}/${var.OUTPUT_DIR}\"",
+      "  echo 'Created directory structure as it was missing'",
+      "fi",
+      
+      # Cleanup any existing containers for this client
+      "echo 'Checking for existing containers for this client...'",
+      "CLIENT_CONTAINER=$(docker ps -a | grep -i \"superset_${var.CLIENT_NAME}\" | awk '{print $1}' || echo '')",
+      "if [ -n \"$CLIENT_CONTAINER\" ]; then",
+      "  echo 'Found container matching client name: $CLIENT_CONTAINER'",
+      "  docker stop $CLIENT_CONTAINER 2>/dev/null || true",
+      "  docker rm $CLIENT_CONTAINER 2>/dev/null || true",
+      "fi",
+      
+      # Also check for containers using the specific port
+      "PORT_CONTAINER=$(docker ps | grep -i \"${var.CONTAINER_PORT}:8088\" | awk '{print $1}' || echo '')",
+      "if [ -n \"$PORT_CONTAINER\" ]; then",
+      "  echo 'Found container using our port, stopping it: $PORT_CONTAINER'",
+      "  docker stop $PORT_CONTAINER 2>/dev/null || true",
+      "fi",
+      
       "cd ${var.CLONED_PARENT_DIR}/${var.SUPERSET_MAKE_CLIENT_DIR}/${var.OUTPUT_DIR} && chmod +x build.sh && ./build.sh",
       "sleep 5",
       "cd ${var.CLONED_PARENT_DIR}/${var.SUPERSET_MAKE_CLIENT_DIR}/${var.OUTPUT_DIR} && docker compose -f docker-compose.yml up -d",
-      "sleep 5",
-      "cd ${var.CLONED_PARENT_DIR}/${var.SUPERSET_MAKE_CLIENT_DIR}/${var.OUTPUT_DIR} && chmod +x start-superset.sh && bash start-superset.sh"
+      "sleep 10",
+      "cd ${var.CLONED_PARENT_DIR}/${var.SUPERSET_MAKE_CLIENT_DIR}/${var.OUTPUT_DIR} && chmod +x start-superset.sh && bash start-superset.sh",
+      
+      # Check if the container is running
+      "SUCCESS=0",
+      "if docker ps | grep -q \"superset_${var.CLIENT_NAME}\"; then",
+      "  echo 'SUCCESS: Container is running. Creating a marker file to indicate successful deployment'",
+      "  echo \"${var.CLIENT_NAME}-${var.CONTAINER_PORT}\" > .deployment_successful",
+      "  SUCCESS=1",
+      "else",
+      "  echo 'WARNING: Failed to start Superset container'",
+      "  echo 'Check docker logs for more information:'",
+      "  docker compose -f docker-compose.yml logs | tail -n 50",
+      "fi"
     ]
   }
 }
 
+# Final cleanup resource to ensure terraform state files are removed
+resource "null_resource" "cleanup_state_files" {
+  depends_on = [
+    aws_lb_target_group.neworg_tgt_group,
+    aws_lb_target_group_attachment.neworg_register_ec2,
+    aws_lb_listener_rule.neworg_listener_rule,
+    null_resource.remote_build
+  ]
+  
+  # Always run this resource
+  triggers = {
+    always_run = "${timestamp()}"
+  }
+  
+  # Clean up state files locally
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Cleaning up Terraform state files locally..."
+      rm -f terraform.tfstate terraform.tfstate.backup || true
+      echo "Cleanup completed"
+    EOT
+  }
+}
 
 # Main Task of the script is below two items
 # One rule for redirection will be added onto current port 443's exisiting rule with given header as input

@@ -445,11 +445,13 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
             "completed_at": datetime.now(timezone.utc).isoformat()
         }
         logger.info(f"Returning result with credentials: {result['credentials'] is not None}")
+        
         return result
         
     except Exception as e:
         error_msg = f"Unexpected error during Terraform execution: {str(e)}"
         logger.exception(error_msg)
+        
         return {
             "status": "error",
             "error": error_msg,
@@ -458,6 +460,23 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
             "credentials": None
         }
     finally:
-        # Clean up task-specific tfvars file if needed
-        # We leave the cleanup to the on_success/on_failure handlers
-        pass
+        # Clean up state files regardless of success or failure
+        try:
+            # Get all state files to clean up
+            state_files = [
+                os.path.join(terraform_path, "terraform.tfstate"),
+                os.path.join(terraform_path, "terraform.tfstate.backup")
+            ]
+            
+            # Delete each state file if it exists
+            for state_file in state_files:
+                if os.path.exists(state_file):
+                    logger.info(f"Cleaning up Terraform state file: {state_file}")
+                    os.remove(state_file)
+                    logger.info(f"Successfully removed state file: {state_file}")
+                else:
+                    logger.info(f"State file not found, skipping cleanup: {state_file}")
+        except Exception as cleanup_err:
+            logger.warning(f"Error during state file cleanup (non-critical): {str(cleanup_err)}")
+            
+        # We already cleanup task-specific tfvars files in the on_success/on_failure handlers
