@@ -129,16 +129,12 @@ When a job is complete, the response includes any outputs from the Terraform scr
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "success",
   "result": {
-    "credentials": {
-      "host": "some-db.amazonaws.com",
-      "port": "5432",
-      "user": "database_user",
-      "password": "secure_password123",
-      "dbname": "customer_db"
-    },
-    "outputs": {
-      "some_terraform_output": "value"
-    }
+    "host": "some-db.amazonaws.com",
+    "port": "5432",
+    "user": "database_user",
+    "password": "secure_password123",
+    "dbname": "customer_db",
+    "database_url": "postgres://user:pass@hostname:5432/db"
   },
   "error": null
 }
@@ -154,43 +150,3 @@ Or in case of an error:
   "error": "Failed to create database: invalid parameters"
 }
 ```
-
-## Monitoring Celery Tasks
-
-You can monitor the Celery tasks using Flower, a web-based tool for monitoring Celery:
-
-- Access Flower UI: http://localhost:5555
-- View task status, progress, history
-- Filter and search tasks
-- See worker status and resource usage
-
-## Testing
-
-```bash
-pytest
-```
-
-For test coverage:
-
-```bash
-pytest --cov=app
-```
-
-## Project Structure
-
-```
-app/
-├── api/
-│   └── v1/         # API v1 endpoints
-├── core/           # Core application components 
-├── schemas/        # Pydantic models for payload/response validation
-├── services/       # Business logic
-├── tasks/          # Celery tasks
-└── tests/          # Test suite
-    ├── integration/
-    └── unit/
-```
-
-## License
-
-MIT 

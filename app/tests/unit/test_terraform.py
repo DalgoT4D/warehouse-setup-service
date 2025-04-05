@@ -104,13 +104,13 @@ def test_get_terraform_status(
     content = response.json()
     assert content["id"] == task_id
     assert content["status"] == "success"  # Check the string value instead of enum
-    assert content["result"]["outputs"]["database_url"] == "postgres://user:pass@hostname:5432/db"
-    assert "credentials" in content["result"]
-    assert content["result"]["credentials"]["dbname"] == "test-db"
-    assert content["result"]["credentials"]["host"] == "superset.cwqixp4vwhou.us-east-1.rds.amazonaws.com"
-    assert content["result"]["credentials"]["port"] == "5432"
-    assert content["result"]["credentials"]["user"] == "test-db_user"
-    assert content["result"]["credentials"]["password"] == "test_password"
+    # Check for flattened result structure (no nested credentials object)
+    assert content["result"]["database_url"] == "postgres://user:pass@hostname:5432/db"
+    assert content["result"]["dbname"] == "test-db"
+    assert content["result"]["host"] == "superset.cwqixp4vwhou.us-east-1.rds.amazonaws.com"
+    assert content["result"]["port"] == "5432"
+    assert content["result"]["user"] == "test-db_user"
+    assert content["result"]["password"] == "test_password"
     assert content["error"] is None
 
 

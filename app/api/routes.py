@@ -398,11 +398,12 @@ async def get_task_status(task_id: str) -> Any:
                     terraform_status = TerraformStatus.ERROR
                 # If status is successful and there's no error, extract outputs and credentials for the result
                 elif terraform_status == TerraformStatus.SUCCESS:
-                    # Include outputs and credentials in the result
+                    # Include outputs and credentials in the result, but flatten the structure
                     if result.get('outputs'):
-                        result_data['outputs'] = result.get('outputs')
+                        result_data.update(result.get('outputs'))
                     if result.get('credentials'):
-                        result_data['credentials'] = result.get('credentials')
+                        # Add credentials directly to result_data instead of nesting them
+                        result_data.update(result.get('credentials'))
                     logger.info(f"Job successful, including data in result field")
         except Exception as e:
             logger.exception(f"Error extracting task result: {e}")
