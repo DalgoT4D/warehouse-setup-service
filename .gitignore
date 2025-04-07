@@ -91,3 +91,4 @@ Thumbs.db
 *.swo
 *.bak
 .qodo
+.env.docker
