@@ -20,7 +20,7 @@ class TerraformResponse(BaseModel):
 class TerraformJobStatusResponse(BaseModel):
     """Response model for job status query"""
     id: str
-    status: TerraformStatus
+    status: str  # Changed from TerraformStatus to str to accept raw Celery states
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 

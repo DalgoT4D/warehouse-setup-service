@@ -98,10 +98,13 @@ def celery_status_to_terraform_status(celery_status):
     Convert Celery task status to TerraformStatus
     
     Handles all standard Celery states:
-    - SUCCESS: Task completed successfully
-    - FAILURE: Task failed due to an exception or other error
-    - REVOKED: Task was revoked before execution
-    - REJECTED: Task was rejected by the worker
+    - PENDING: Task state is unknown (assumed pending since you know the id)
+    - RECEIVED: Task was received by a worker (only used in events)
+    - STARTED: Task was started by a worker
+    - SUCCESS: Task succeeded
+    - FAILURE: Task failed
+    - REVOKED: Task was revoked
+    - REJECTED: Task was rejected (only used in events)
     - IGNORED: Task was ignored by the worker
     """
     logger.debug(f"Converting Celery status: {celery_status}")
@@ -110,13 +113,8 @@ def celery_status_to_terraform_status(celery_status):
     if celery_status == SUCCESS:
         return TerraformStatus.SUCCESS
     
-    # Check for error states (FAILURE, REVOKED, REJECTED)
-    elif celery_status in CELERY_ERROR_STATES:
-        return TerraformStatus.ERROR
-    
-    # Check if the state is one of the terminal states but not SUCCESS or in ERROR_STATES
-    elif celery_status in CELERY_TERMINAL_STATES:
-        # This catches IGNORED
+    # Check for error states (FAILURE, REVOKED, REJECTED, IGNORED)
+    elif celery_status in [FAILURE, REVOKED, REJECTED, IGNORED]:
         return TerraformStatus.ERROR
     
     # Check for PENDING and RECEIVED states
@@ -357,25 +355,25 @@ async def get_task_status(task_id: str) -> Any:
             detail=f"Task ID {task_id} not found"
         )
     
-    # Convert Celery status to TerraformStatus
-    terraform_status = celery_status_to_terraform_status(task_result.status)
-    logger.info(f"Task status: {task_result.status}, converted to: {terraform_status}")
+    # Get the raw Celery state
+    celery_state = task_result.status
+    logger.info(f"Raw Celery state: {celery_state}")
     
     # Initialize result and error
     result_data = {}
     error = None
     
     # Determine error message based on Celery state
-    if task_result.status == REVOKED:
+    if celery_state == REVOKED:
         error = "Task was cancelled or revoked"
-    elif task_result.status == REJECTED:
+    elif celery_state == REJECTED:
         error = "Task was rejected by worker"
-    elif task_result.status == IGNORED:
+    elif celery_state == IGNORED:
         error = "Task was ignored by worker"
     
     # If the task is in a terminal state (SUCCESS, FAILURE, REVOKED, REJECTED, IGNORED)
-    if task_result.status in CELERY_TERMINAL_STATES:
-        logger.info(f"Task is in terminal state: {task_result.status}")
+    if celery_state in CELERY_TERMINAL_STATES:
+        logger.info(f"Task is in terminal state: {celery_state}")
         try:
             # Always try to get the result, regardless of success/failure
             result = task_result.result
@@ -388,16 +386,8 @@ async def get_task_status(task_id: str) -> Any:
                 if result.get('error'):
                     error = result.get('error')
                     logger.error(f"Error found in result: {error}")
-                    # Override terraform_status to ERROR if there's an error, regardless of celery status
-                    terraform_status = TerraformStatus.ERROR
-                # Check if result has explicit status field
-                elif result.get('status') == 'ERROR':
-                    error = result.get('error')
-                    logger.error(f"Error status found in result: {error}")
-                    # Override terraform_status to ERROR
-                    terraform_status = TerraformStatus.ERROR
                 # If status is successful and there's no error, extract outputs and credentials for the result
-                elif terraform_status == TerraformStatus.SUCCESS:
+                elif celery_state == SUCCESS:
                     # Include outputs and credentials in the result, but flatten the structure
                     if result.get('outputs'):
                         result_data.update(result.get('outputs'))
@@ -408,10 +398,9 @@ async def get_task_status(task_id: str) -> Any:
         except Exception as e:
             logger.exception(f"Error extracting task result: {e}")
             error = str(e)
-            terraform_status = TerraformStatus.ERROR
     
     # Set the error message if task failed but we don't have a specific error yet
-    if task_result.status == FAILURE and not error:
+    if celery_state == FAILURE and not error:
         try:
             error = str(task_result.result) if task_result.result else "Task failed"
         except Exception as e:
@@ -421,7 +410,7 @@ async def get_task_status(task_id: str) -> Any:
     # Create status response using id in the response but taking task_id as the source
     response = TerraformJobStatusResponse(
         id=task_id,
-        status=terraform_status,
+        status=celery_state,  # Use the raw Celery state directly
         result=result_data if result_data else None,
         error=error
     )

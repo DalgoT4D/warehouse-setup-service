@@ -5,6 +5,7 @@ import shutil
 from typing import Dict, Any, Tuple
 from celery import Task
 from celery.utils.log import get_task_logger
+from celery.states import STARTED
 from app.core.celery_app import celery_app
 from app.core.config import settings
 import time
@@ -139,7 +140,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
         logger.info(f"temp_task_configs directory already exists at: {abs_task_configs_path}")
     
     # Update task state to STARTED (running)
-    self.update_state(state='STARTED', meta={'status': 'running'})
+    self.update_state(state=STARTED, meta={'status': 'running'})
     
     # Verify terraform_path exists or use fallback from settings
     if not os.path.exists(terraform_path):
@@ -223,11 +224,16 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
         
         # Check if SSH key exists
         if not os.path.exists(module_settings.SSH_KEY_PATH):
-            logger.error(f"SSH key not found at: {module_settings.SSH_KEY_PATH}")
             error_msg = f"Terraform apply would fail: SSH key not found at {module_settings.SSH_KEY_PATH}"
-            
-            # We'll continue with execution but log the warning
-            logger.warning("Continuing with execution despite missing SSH key, expect terraform to fail")
+            logger.error(error_msg)
+            return {
+                "status": "ERROR",
+                "phase": "pre_check",
+                "error": error_msg,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "credentials": None
+            }
         
         # Create task-specific tfvars file
         task_tfvars_path = settings.create_task_specific_tfvars(

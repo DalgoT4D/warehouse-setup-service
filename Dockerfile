@@ -10,24 +10,27 @@ RUN apt-get update && apt-get install -y \
     software-properties-common \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Terraform
-RUN curl -fsSL https://apt.releases.hashicorp.com/gpg | apt-key add - \
-    && apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
-    && apt-get update && apt-get install -y terraform \
-    && rm -rf /var/lib/apt/lists/*
+# Install Terraform with architecture detection (works on both ARM64 and AMD64)
+RUN TERRAFORM_VERSION="1.4.6" \
+    && ARCH=$(dpkg --print-architecture) \
+    && case ${ARCH} in \
+        amd64) TERRAFORM_ARCH="amd64" ;; \
+        arm64) TERRAFORM_ARCH="arm64" ;; \
+        *) echo "Unsupported architecture: ${ARCH}" && exit 1 ;; \
+    esac \
+    && curl -fsSL -o /tmp/terraform.zip https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${TERRAFORM_ARCH}.zip \
+    && unzip /tmp/terraform.zip -d /usr/local/bin/ \
+    && rm -f /tmp/terraform.zip \
+    && terraform --version
 
-# Install uv
-RUN pip install --no-cache-dir uv
+# Create README.md placeholder to avoid build errors
+RUN echo "# Warehouse Setup" > README.md
 
 # Copy project files
 COPY . .
 
-# Create venv and install dependencies
-RUN uv venv /app/.venv && \
-    /app/.venv/bin/uv pip install -e ".[dev]"
-
-# Use the virtual environment
-ENV PATH="/app/.venv/bin:$PATH"
+# Install base Python dependencies
+RUN pip install --no-cache-dir fastapi uvicorn[standard] celery[redis] redis pydantic pydantic-settings httpx python-dotenv flower
 
 # Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"] 
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8006"] 
