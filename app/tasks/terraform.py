@@ -372,17 +372,17 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
             
             if destroy_returncode == 0:
                 destroy_output = destroy_stdout
-                destroy_status = "success"
+                destroy_status = "SUCCESS"
                 logger.info("Successfully cleaned up resources with terraform destroy after failed apply")
             else:
                 destroy_output = f"Destroy failed: {destroy_stderr}"
-                destroy_status = "failed"
+                destroy_status = "FAILED"
                 logger.error(f"Failed to clean up resources: {destroy_stderr}")
             
             # Return error status and explicitly set credentials to None
             logger.info("Returning error status due to failed terraform apply, credentials will not be included")
             return {
-                "status": "error",
+                "status": "ERROR",
                 "phase": "apply",
                 "error": error_msg,
                 "stderr": apply_stderr,
@@ -411,7 +411,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 port_changed = outputs.get('port_changed', {}).get('value', False)
                 
                 # Update credentials with the actual port and additional information
-                if credentials and 'superset_url' in credentials:
+                if credentials and 'url' in credentials:
                     # Add the port information to credentials
                     credentials['port'] = actual_port
                     
@@ -435,7 +435,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
         # Log the final result before returning
         logger.info(f"Terraform job completed successfully, credentials: {credentials}")
         result = {
-            "status": "success",
+            "status": "SUCCESS",
             "init_output": init_stdout,
             "plan_output": plan_stdout,
             "apply_output": apply_stdout,
@@ -453,7 +453,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
         logger.exception(error_msg)
         
         return {
-            "status": "error",
+            "status": "ERROR",
             "error": error_msg,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "completed_at": datetime.now(timezone.utc).isoformat(),

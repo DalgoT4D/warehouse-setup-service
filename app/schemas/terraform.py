@@ -6,10 +6,10 @@ from pydantic import BaseModel, Field
 
 class TerraformStatus(str, Enum):
     """Status of a Terraform operation"""
-    PENDING = "pending"
-    RUNNING = "running"
-    SUCCESS = "success"
-    ERROR = "error"
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCESS = "SUCCESS"
+    ERROR = "ERROR"
 
 
 class TerraformResponse(BaseModel):

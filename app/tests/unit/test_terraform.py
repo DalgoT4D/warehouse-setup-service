@@ -103,7 +103,7 @@ def test_get_terraform_status(
     
     content = response.json()
     assert content["id"] == task_id
-    assert content["status"] == "success"  # Check the string value instead of enum
+    assert content["status"] == "SUCCESS"  # Check the string value instead of enum
     # Check for flattened result structure (no nested credentials object)
     assert content["result"]["database_url"] == "postgres://user:pass@hostname:5432/db"
     assert content["result"]["dbname"] == "test-db"
@@ -154,7 +154,7 @@ def test_get_terraform_status_failed(
     mock_result.failed.return_value = True
     mock_result.ready.return_value = True
     mock_result.result = {
-        "status": "error",
+        "status": "ERROR",
         "error": "Failed to create Superset instance",
         "phase": "apply"
     }
@@ -166,6 +166,6 @@ def test_get_terraform_status_failed(
     
     content = response.json()
     assert content["id"] == task_id
-    assert content["status"] == "error"  # Check the string value instead of enum
+    assert content["status"] == "ERROR"  # Check the string value instead of enum
     assert content["result"] is None
     assert content["error"] == "Failed to create Superset instance" 

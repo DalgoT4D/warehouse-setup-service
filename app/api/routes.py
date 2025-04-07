@@ -306,8 +306,8 @@ async def create_superset(payload: SupersetRequest):
         
         # Store credentials with the task
         credentials = {
-            "superset_url": f"https://{payload.client_name}.dalgo.org",
-            "admin_username": module_settings.SUPERSET_ADMIN_USERNAME,
+            "url": f"https://{payload.client_name}.dalgo.org",
+            "admin_user": module_settings.SUPERSET_ADMIN_USERNAME,
             "admin_password": admin_password
         }
         
@@ -391,7 +391,7 @@ async def get_task_status(task_id: str) -> Any:
                     # Override terraform_status to ERROR if there's an error, regardless of celery status
                     terraform_status = TerraformStatus.ERROR
                 # Check if result has explicit status field
-                elif result.get('status') == 'error':
+                elif result.get('status') == 'ERROR':
                     error = result.get('error')
                     logger.error(f"Error status found in result: {error}")
                     # Override terraform_status to ERROR
