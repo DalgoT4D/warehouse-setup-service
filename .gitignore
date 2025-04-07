@@ -50,7 +50,7 @@ htmlcov/
 .env.test.local
 .env.production.local 
 
-
+.env.docker
 # terraform
 
 # Local Terraform directories
@@ -64,6 +64,7 @@ terraform.tfstate.backup
 *.tfstate
 *.tfstate.backup
 
+.env.docker
 # Crash logs (generated when Terraform crashes)
 crash.log
 crash.*
