@@ -3,6 +3,10 @@ variable "rdsname" {
   description = "The identifier of the existing RDS instance."
 }
 
+variable "RDS_DOMAIN" {
+  description = "The domain name of the RDS instance."
+}
+
 variable "POSTGRES_USER" {
   description = "The PostgreSQL master username for the RDS instance."
 }
@@ -23,16 +27,9 @@ variable "APP_DB_PASS" {
   description = "The password for the new database user."
 }
 
-variable "REMOTE_USER" {
-  description = "The SSH user for the EC2 instance."
-}
-
-variable "SSH_KEY" {
-  description = "The private key file for SSH authentication."
-}
-
-variable "ec2_instance_id" {
-  description = "The EC2 instance ID used for SSH access."
+variable "DB_PORT" {
+  description = "The port number for the PostgreSQL database (default is 5432)."
+  default     = 5432
 }
 
 variable "aws_access_key"{
