@@ -38,10 +38,6 @@ variable "neworg_name" {
   description = "this is domain name of new Customer for which superset application is to be deployed"
   type        = string
 }
-variable "rule_priority" {
-  description = "this is priority for the rule which has to be added in port 443"
-  type        = string
-}
 variable "aws_access_key" {
   type = string
 }
