@@ -203,7 +203,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "error": error_msg,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "credentials": None
+                "credentials": {}
             }
         
         if not os.path.exists(main_tf_path):
@@ -214,7 +214,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "error": error_msg,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "credentials": None
+                "credentials": {}
             }
             
         # Load module settings to get SSH key path
@@ -222,8 +222,8 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
         logger.info(f"Loaded module settings: RDS Instance Name: {module_settings.RDS_INSTANCE_NAME}")
         logger.info(f"SSH Key Path from module settings: {module_settings.SSH_KEY_PATH}")
         
-        # Check if SSH key exists
-        if not os.path.exists(module_settings.SSH_KEY_PATH):
+        # Check if SSH key exists - only for superset module, not for warehouse
+        if module_type == "superset" and not os.path.exists(module_settings.SSH_KEY_PATH):
             error_msg = f"Terraform apply would fail: SSH key not found at {module_settings.SSH_KEY_PATH}"
             logger.error(error_msg)
             return {
@@ -232,7 +232,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "error": error_msg,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "credentials": None
+                "credentials": {}
             }
         
         # Create task-specific tfvars file
@@ -257,7 +257,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "error": error_msg,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "credentials": None
+                "credentials": {}
             }
         
         # Change to terraform directory
@@ -311,7 +311,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "init_output": init_stdout,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "credentials": None  # Do not include credentials on error
+                "credentials": {}
             }
         
         # 3. Run terraform plan with task-specific var file
@@ -343,7 +343,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "plan_output": plan_stdout,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "credentials": None  # Do not include credentials on error
+                "credentials": {}
             }
         
         # 4. Run terraform apply with task-specific var file
@@ -385,8 +385,8 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 destroy_status = "FAILED"
                 logger.error(f"Failed to clean up resources: {destroy_stderr}")
             
-            # Return error status and explicitly set credentials to None
-            logger.info("Returning error status due to failed terraform apply, credentials will not be included")
+            # Return error status and explicitly set credentials to empty dict
+            logger.info("Returning error status due to failed terraform apply, credentials will be empty dict")
             return {
                 "status": "ERROR",
                 "phase": "apply",
@@ -399,7 +399,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
                 "destroy_status": destroy_status,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "credentials": None  # Explicitly do not include credentials on error
+                "credentials": {}
             }
         
         # 5. Get outputs if apply succeeded
@@ -463,7 +463,7 @@ def run_terraform_commands(self, terraform_path: str, credentials: Dict[str, str
             "error": error_msg,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "completed_at": datetime.now(timezone.utc).isoformat(),
-            "credentials": None
+            "credentials": {}
         }
     finally:
         # Clean up state files regardless of success or failure
