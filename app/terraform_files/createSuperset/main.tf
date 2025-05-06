@@ -109,7 +109,18 @@ resource "null_resource" "update_superset_env" {
       "$SED_CMD 's/^APP_DB_PASS=.*/APP_DB_PASS=${var.APP_DB_PASS}/' superset.env",
       "$SED_CMD 's/^APP_DB_NAME=superset.*/APP_DB_NAME=${var.APP_DB_NAME}/' superset.env",
       "$SED_CMD 's/ENABLE_OAUTH=1/ENABLE_OAUTH=/' superset.env",
-      "$SED_CMD 's#^SQLALCHEMY_DATABASE_URI=.*#SQLALCHEMY_DATABASE_URI=postgresql://${var.POSTGRES_USER}:${var.POSTGRES_PASSWORD}@${data.aws_db_instance.PostgresRDS.address}/${var.APP_DB_NAME}#' superset.env"
+      "$SED_CMD 's#^SQLALCHEMY_DATABASE_URI=.*#SQLALCHEMY_DATABASE_URI=postgresql://${var.POSTGRES_USER}:${var.POSTGRES_PASSWORD}@${data.aws_db_instance.PostgresRDS.address}/${var.APP_DB_NAME}#' superset.env",
+      
+      # Add SMTP configurations
+      "$SED_CMD 's/^SMTP_HOST=.*/SMTP_HOST=${var.SMTP_HOST}/' superset.env",
+      "$SED_CMD 's/^SMTP_PORT=.*/SMTP_PORT=${var.SMTP_PORT}/' superset.env",
+      "$SED_CMD 's/^SMTP_USER=.*/SMTP_USER=${var.SMTP_USER}/' superset.env",
+      "$SED_CMD 's/^SMTP_PASSWORD=.*/SMTP_PASSWORD=${var.SMTP_PASSWORD}/' superset.env",
+      "$SED_CMD 's/^SMTP_MAIL_FROM=.*/SMTP_MAIL_FROM=${var.SMTP_MAIL_FROM}/' superset.env",
+      
+      # Add Mapbox and CORS configurations
+      "$SED_CMD 's/^MAPBOX_API_KEY=.*/MAPBOX_API_KEY=${var.MAPBOX_API_KEY}/' superset.env",
+      "$SED_CMD 's/^CORS_ORIGINS=.*/CORS_ORIGINS=${var.CORS_ORIGINS}/' superset.env"
     ]
   }
 }

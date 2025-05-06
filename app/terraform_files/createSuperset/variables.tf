@@ -55,3 +55,37 @@ variable "alb_sg" {
   description = "This is the security group attached with alb"
   type = string
 }
+variable "SMTP_HOST" {
+  description = "SMTP host for email notifications"
+  type        = string
+}
+
+variable "SMTP_PORT" {
+  description = "SMTP port for email notifications"
+  type        = string
+}
+
+variable "SMTP_USER" {
+  description = "SMTP user for email notifications"
+  type        = string
+}
+
+variable "SMTP_PASSWORD" {
+  description = "SMTP password for email notifications"
+  type        = string
+}
+
+variable "SMTP_MAIL_FROM" {
+  description = "SMTP from address for email notifications"
+  type        = string
+}
+
+variable "MAPBOX_API_KEY" {
+  description = "Mapbox API key for maps integration"
+  type        = string
+}
+
+variable "CORS_ORIGINS" {
+  description = "CORS allowed origins"
+  type        = string
+}
