@@ -9,10 +9,26 @@ resource "null_resource" "setup_database" {
   }
   provisioner "remote-exec" {
     inline = [
-      "echo 'Creating Database and User ' ",
-      " PGPASSWORD=${var.POSTGRES_PASSWORD} psql -h ${data.aws_db_instance.PostgresRDS.address} -U ${var.POSTGRES_USER} -c 'CREATE DATABASE ${var.APP_DB_NAME}' ",
-      " PGPASSWORD=${var.POSTGRES_PASSWORD} psql -h ${data.aws_db_instance.PostgresRDS.address} -U ${var.POSTGRES_USER} -c \"CREATE USER ${var.APP_DB_USER} WITH PASSWORD '${var.APP_DB_PASS}' \" ",
-      " PGPASSWORD=${var.POSTGRES_PASSWORD} psql -h ${data.aws_db_instance.PostgresRDS.address} -U ${var.POSTGRES_USER} -c 'GRANT ALL PRIVILEGES ON DATABASE ${var.APP_DB_NAME} TO ${var.APP_DB_USER}' "
+      "echo 'Starting database setup...'",
+      "echo 'Testing PostgreSQL connection...'",
+      "if ! PGPASSWORD=${var.POSTGRES_PASSWORD} psql -h ${data.aws_db_instance.PostgresRDS.address} -U ${var.POSTGRES_USER} -c 'SELECT 1' > /dev/null 2>&1; then",
+      "  echo 'Error: Could not connect to PostgreSQL'",
+      "  exit 1",
+      "fi",
+      
+      "echo 'Creating database if not exists...'",
+      "PGPASSWORD=${var.POSTGRES_PASSWORD} psql -h ${data.aws_db_instance.PostgresRDS.address} -U ${var.POSTGRES_USER} -c \"CREATE DATABASE ${var.APP_DB_NAME}\" || echo 'Database might already exist'",
+      
+      "echo 'Creating user if not exists...'",
+      "PGPASSWORD=${var.POSTGRES_PASSWORD} psql -h ${data.aws_db_instance.PostgresRDS.address} -U ${var.POSTGRES_USER} -c \"DO \\$\\$ BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${var.APP_DB_USER}') THEN CREATE USER ${var.APP_DB_USER} WITH PASSWORD '${var.APP_DB_PASS}'; END IF; END \\$\\$;\"",
+      
+      "echo 'Granting database privileges...'",
+      "PGPASSWORD=${var.POSTGRES_PASSWORD} psql -h ${data.aws_db_instance.PostgresRDS.address} -U ${var.POSTGRES_USER} -c \"GRANT ALL PRIVILEGES ON DATABASE ${var.APP_DB_NAME} TO ${var.APP_DB_USER}\"",
+      
+      "echo 'Granting schema privileges...'",
+      "PGPASSWORD=${var.POSTGRES_PASSWORD} psql -h ${data.aws_db_instance.PostgresRDS.address} -U ${var.POSTGRES_USER} -d ${var.APP_DB_NAME} -c \"GRANT ALL ON SCHEMA public TO ${var.APP_DB_USER}\"",
+      
+      "echo 'Database setup completed successfully'"
     ]
   }
 }
@@ -99,28 +115,27 @@ resource "null_resource" "update_superset_env" {
       
       "cd ${var.CLONED_PARENT_DIR}/${var.SUPERSET_MAKE_CLIENT_DIR}/${var.OUTPUT_DIR}",
       
-      "$SED_CMD 's/^SUPERSET_SECRET_KEY=.*/SUPERSET_SECRET_KEY=${var.SUPERSET_SECRET_KEY}/' superset.env",
-      "$SED_CMD 's/^SUPERSET_ADMIN_USERNAME=.*/SUPERSET_ADMIN_USERNAME=${var.SUPERSET_ADMIN_USERNAME}/' superset.env",
-      "$SED_CMD 's/^SUPERSET_ADMIN_PASSWORD=.*/SUPERSET_ADMIN_PASSWORD=${var.SUPERSET_ADMIN_PASSWORD}/' superset.env",
-      "$SED_CMD 's/^SUPERSET_ADMIN_EMAIL=.*/SUPERSET_ADMIN_EMAIL=${var.SUPERSET_ADMIN_EMAIL}/' superset.env",
-      "$SED_CMD 's/^POSTGRES_USER=.*/POSTGRES_USER=${var.POSTGRES_USER}/' superset.env",
-      "$SED_CMD 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${var.POSTGRES_PASSWORD}/' superset.env",
-      "$SED_CMD 's/^APP_DB_USER=superset/APP_DB_USER=${var.APP_DB_USER}/' superset.env",
-      "$SED_CMD 's/^APP_DB_PASS=.*/APP_DB_PASS=${var.APP_DB_PASS}/' superset.env",
-      "$SED_CMD 's/^APP_DB_NAME=superset.*/APP_DB_NAME=${var.APP_DB_NAME}/' superset.env",
-      "$SED_CMD 's/ENABLE_OAUTH=1/ENABLE_OAUTH=/' superset.env",
-      "$SED_CMD 's#^SQLALCHEMY_DATABASE_URI=.*#SQLALCHEMY_DATABASE_URI=postgresql://${var.POSTGRES_USER}:${var.POSTGRES_PASSWORD}@${data.aws_db_instance.PostgresRDS.address}/${var.APP_DB_NAME}#' superset.env",
+      # Use a simpler approach for sed replacements
+      "$SED_CMD 's|^SUPERSET_SECRET_KEY=.*|SUPERSET_SECRET_KEY=${var.SUPERSET_SECRET_KEY}|' superset.env",
+      "$SED_CMD 's|^SUPERSET_ADMIN_USERNAME=.*|SUPERSET_ADMIN_USERNAME=${var.SUPERSET_ADMIN_USERNAME}|' superset.env",
+      "$SED_CMD 's|^SUPERSET_ADMIN_PASSWORD=.*|SUPERSET_ADMIN_PASSWORD=${var.SUPERSET_ADMIN_PASSWORD}|' superset.env",
+      "$SED_CMD 's|^SUPERSET_ADMIN_EMAIL=.*|SUPERSET_ADMIN_EMAIL=${var.SUPERSET_ADMIN_EMAIL}|' superset.env",
+      "$SED_CMD 's|^POSTGRES_USER=.*|POSTGRES_USER=${var.POSTGRES_USER}|' superset.env",
+      "$SED_CMD 's|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${var.POSTGRES_PASSWORD}|' superset.env",
+      "$SED_CMD 's|^APP_DB_USER=superset|APP_DB_USER=${var.APP_DB_USER}|' superset.env",
+      "$SED_CMD 's|^APP_DB_PASS=.*|APP_DB_PASS=${var.APP_DB_PASS}|' superset.env",
+      "$SED_CMD 's|^APP_DB_NAME=superset.*|APP_DB_NAME=${var.APP_DB_NAME}|' superset.env",
+      "$SED_CMD 's|ENABLE_OAUTH=1|ENABLE_OAUTH=|' superset.env",
+      "$SED_CMD 's|^SQLALCHEMY_DATABASE_URI=.*|SQLALCHEMY_DATABASE_URI=postgresql://${var.POSTGRES_USER}:${var.POSTGRES_PASSWORD}@${data.aws_db_instance.PostgresRDS.address}/${var.APP_DB_NAME}|' superset.env",
       
-      # Add SMTP configurations
-      "$SED_CMD 's/^SMTP_HOST=.*/SMTP_HOST=${var.SMTP_HOST}/' superset.env",
-      "$SED_CMD 's/^SMTP_PORT=.*/SMTP_PORT=${var.SMTP_PORT}/' superset.env",
-      "$SED_CMD 's/^SMTP_USER=.*/SMTP_USER=${var.SMTP_USER}/' superset.env",
-      "$SED_CMD 's/^SMTP_PASSWORD=.*/SMTP_PASSWORD=${var.SMTP_PASSWORD}/' superset.env",
-      "$SED_CMD 's/^SMTP_MAIL_FROM=.*/SMTP_MAIL_FROM=${var.SMTP_MAIL_FROM}/' superset.env",
-      
-      # Add Mapbox and CORS configurations
-      "$SED_CMD 's/^MAPBOX_API_KEY=.*/MAPBOX_API_KEY=${var.MAPBOX_API_KEY}/' superset.env",
-      "$SED_CMD 's/^CORS_ORIGINS=.*/CORS_ORIGINS=${var.CORS_ORIGINS}/' superset.env"
+      # Add SMTP and other configurations
+      "$SED_CMD 's|^SMTP_HOST=.*|SMTP_HOST=${var.SMTP_HOST}|' superset.env",
+      "$SED_CMD 's|^SMTP_PORT=.*|SMTP_PORT=${var.SMTP_PORT}|' superset.env",
+      "$SED_CMD 's|^SMTP_USER=.*|SMTP_USER=${var.SMTP_USER}|' superset.env",
+      "$SED_CMD 's|^SMTP_PASSWORD=.*|SMTP_PASSWORD=${var.SMTP_PASSWORD}|' superset.env",
+      "$SED_CMD 's|^SMTP_MAIL_FROM=.*|SMTP_MAIL_FROM=${var.SMTP_MAIL_FROM}|' superset.env",
+      "$SED_CMD 's|^MAPBOX_API_KEY=.*|MAPBOX_API_KEY=${var.MAPBOX_API_KEY}|' superset.env",
+      "$SED_CMD 's|^CORS_ORIGINS=.*|CORS_ORIGINS=${var.CORS_ORIGINS}|' superset.env"
     ]
   }
 }
